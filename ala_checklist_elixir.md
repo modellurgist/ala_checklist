@@ -4,15 +4,10 @@
 to it as "the ALA Checklist".)*
 
 > **If you care only about zero-coupling (not full ALA):** this checklist bundles three commitments —
-> zero-coupling, the abstraction hierarchy, and requirements-on-the-diagram. The coupling part
-> alone compresses to a smaller instrument (3 channels, 1 rule, 4 marks): see
-> [`zero-coupling-core-companion.md`](https://github.com/modellurgist/ala_lab/blob/main/docs/zero-coupling-core-companion.md) (how it relates to this
-> checklist + the language table) and [`zero-coupling-rubric-standalone.md`](https://github.com/modellurgist/ala_lab/blob/main/docs/zero-coupling-rubric-standalone.md)
-> (usable on its own). The thermometer in Rust + Elixir:
-> [`thermometer-rust-and-elixir.md`](https://github.com/modellurgist/ala_lab/blob/main/docs/thermometer-rust-and-elixir.md). Why coupling-only is not
-> enough on its own: [`zero-coupling-without-ala-caveats.md`](https://github.com/modellurgist/ala_lab/blob/main/docs/zero-coupling-without-ala-caveats.md).
-> What full ALA compliance still *doesn't* catch, with two proposed added rules (R6 nameability,
-> R7 earns-its-existence): [`ugly-but-ala-compliant.md`](https://github.com/modellurgist/ala_lab/blob/main/docs/ugly-but-ala-compliant.md).
+> zero-coupling, the abstraction hierarchy, and requirements-on-the-diagram. The coupling part alone
+> compresses to a smaller instrument (3 channels, 1 rule, 4 marks), and can be used on its own — but
+> coupling-only is not sufficient: a program can be perfectly zero-coupled and still be *ugly*, which
+> is what the nameability (R6) and earns-its-existence (R7) rules add on top.
 
 A text notation for functions and their relationships, small enough to type on a whiteboard,
 that makes ALA violations *visible as shapes* instead of judgment calls. Worked against Spray's
@@ -104,8 +99,7 @@ Anything that survives R1–R5 and still can't be given a general, product-free 
 abstraction — inline it into the composition as `(p) ->` wiring (R4's twin, Spray's "func1 is
 not an abstraction"). That instinct is now a rule of its own (R6), because R1–R5 check *coupling
 and knowledge-placement* — structure — and a program can be perfectly R1–R5-clean and still be
-ugly (worked demonstration: [`ugly-but-ala-compliant.md`](https://github.com/modellurgist/ala_lab/blob/main/docs/ugly-but-ala-compliant.md)). R6–R8 add
-the *design-quality* axes structure alone doesn't cover.
+ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
 
 - **R6 — every abstraction names a learnable concept.** A named function/module must denote a
   concept a reader can learn and the language/stdlib does not already name. A meaningless name
@@ -229,10 +223,9 @@ has leaked past the boundary.
 
 R1–R11 are the *detection* instrument. This section holds what did **not** become its own rule:
 (a) background each rule rests on, (b) the procedure to *build* an ALA program, (c) the procedure to
-*refactor* one, and (d) the procedure to *verify* one is ALA. Distilled from
-[`ala-design-guide.md`](https://github.com/modellurgist/ala_lab/blob/main/docs/ala-design-guide.md) and [`ala-full-summary.md`](https://github.com/modellurgist/ala_lab/blob/main/docs/ala-full-summary.md). The
-constraints those docs also state (ports, shared entities, the composition-only top layer, the
-abstraction-quality tests) are now R6–R7 and R9–R11, not repeated here.
+*refactor* one, and (d) the procedure to *verify* one is ALA. The further
+constraints behind the rules (ports, shared entities, the composition-only top layer, the
+abstraction-quality tests) are captured as R6–R7 and R9–R11, not repeated here.
 
 ### Background behind the rules (framing, not separate checks)
 
@@ -678,7 +671,7 @@ Two honest residues, so the encoding doesn't oversell:
 ### The FP endpoint (why the good shape collapses into a pipe)
 
 Once every edge drops a layer, the composition is free to become *pure* composition — Spray's
-monads detour, and literally the Elixir port in `ala_lab` (`Thermometer.push_reading/2` with
+monads detour, and literally the Elixir thermometer (`Thermometer.push_reading/2` with
 `OffsetAndScale`, `LowPassFilter`, `SampleEvery`, `Display` as structs):
 
 ```
@@ -743,7 +736,6 @@ as a pipe.**
 *Origin note: this file started as a numbering sketch of the two trees; the worked forms above
 fix the f-numbering against Spray's actual §1.6 code and add the `[tag]`/`$`/`*`/`q` marks —
 without the tag column, the bad and good trees are nearly the same shape, which is what the first
-sketch ran into. The Elixir pipe form is grounded in
-`ala_lab/lib/ala_lab/ala/examples/thermometer.ex` and its `domain_abstractions/`. The `q` rule
-and the mechanized-check parallels come from the V32 work
-(`ala_lab/docs/v32-d6-build-results.md`).*
+sketch ran into. The Elixir pipe form is grounded in the worked thermometer — the four domain
+abstractions under a `Thermometer` composition. The `q` rule and the mechanized-check parallels
+come from the V32 design work.*
