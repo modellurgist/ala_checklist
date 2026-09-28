@@ -16,6 +16,12 @@ functional-programming reading he develops later
 ([monads detour](https://www.abstractionlayeredarchitecture.com/#truebrief-detour-composing-with-monads),
 [ALA vs FP](https://www.abstractionlayeredarchitecture.com/#trueala-compared-with-functional-programming)).
 
+> **Citations.** Section numbers such as §3.8 or §1.6.4 refer to John Spray's site,
+> [abstractionlayeredarchitecture.com](https://www.abstractionlayeredarchitecture.com/), which is
+> one long page with numbered sections. "Summary" is its unnumbered opening section. Each rule ends
+> with a *Spray:* line naming the sections that support it, so you can check the rule against the
+> source. Where a rule adapts Spray to Elixir or departs from him, the line says so.
+
 ## The notation
 
 A handful of marks; everything else is indentation.
@@ -28,7 +34,8 @@ name [tag] [@lvl]  a function. `name` is its real name — fully-qualified
              nothing in it would change if the product changed. [@name-Lidx] is
              OPTIONAL: the ALA tier it is assigned to (top = L0), tool-assigned
              from a layer map. The tag is WHAT it knows; the level is WHICH tier;
-             they should agree, and a mismatch is itself a smell.
+             they should agree, and a mismatch is itself a smell. R1 is checked
+             on levels; on a whiteboard the tag stands in for them.
 pN           a data value (a wire). p2 <- Filter(p1) : derived by a call.
 *pN          shared/by-reference data (caller and callee both hold it) — an R2 channel.
 $            the function keeps hidden state between calls (static, module var,
@@ -67,33 +74,141 @@ copying an expression into the encoding, you have written code, not an encoding.
 
 The tag is the one semantic ingredient a tool cannot supply; everything after it is mechanical.
 Assign it by asking: *if the product were a different product, would this function's text change?*
-If yes, tag it with the noun that would change ([thermo] here); if no, it is []. Subset tags are
-allowed ([temp] ⊂ [thermo] ⊂ …) but one tag per project is usually enough to start.
+If yes, tag it with the noun that would change ([thermo] here); if no, it is []. A narrower tag
+for a feature's own knowledge is allowed ([thermo:display] under [thermo]), but one tag per project
+is usually enough to start.
+
+## Spray's three fundamental constraints (what the rules check)
+
+Spray builds ALA on three constraints (Summary; §2.1.1, §2.1.3). Every rule below serves one of
+them:
+
+1. **The only unit of code is an abstraction.** Not a module, class, or function as such: "a
+   'generalized conceptual idea'", "learnable as a concept" (§2.1.1). R6 and R7 check this.
+2. **The only relationship is a knowledge dependency on something significantly more abstract**
+   (§2.1.3). Everything else, including every run-time communication between peers, goes through
+   wiring set up by a higher layer. R1, R2, R4, R5, R9, and R10 check this.
+3. **Abstractions are small.** The rule of thumb is "around 100 to 500 lines", and "if abstractions
+   average less than 100 lines of code, we will likely have more abstractions than we need"
+   (Summary, "All abstractions must be small"; §7.10.2 says "probably in the range of 50 to 500").
+   The constraint exists so the first two can't be met by one big ball of mud. It applies to the
+   application too: when the application gets large, it becomes a composition of Features (§7.15).
+   R7 and the module-size check cover this, and R11 covers the application's share.
 
 ## The rules (each is a visible shape)
 
-- **R1 — every edge must drop.** The callee's tag must be a strict subset of the caller's.
-  - `[thermo] → [thermo]` : a **peer / communication dependency** (the classic ALA violation).
-  - `[] → [thermo]` : an **upward dependency** (the worst; also written `^f` for callbacks).
-  - Corollary: tagged functions never nest under tagged functions, so a compliant tree is
-    *shallow* — one tagged composition on top, generic leaves below. Depth is itself a smell.
+- **R1 — every edge between abstractions drops to a lower layer.** Give every function a layer
+  (`@name-Lidx`), from an ordered list running concrete to abstract. Spray's usual list is
+  Application, Features (in bigger apps), Domain Abstractions, Programming Paradigms, and
+  Foundation, and a project may name its own. A call from one abstraction into another must land
+  in a *lower* layer. How far it drops doesn't matter: a long drop is not a smell.
+  - **Peer edge:** two *different* abstractions in the same layer below the application
+    (feature → feature, domain → domain). This is the classic communication dependency. The fix is
+    for the layer above to wire them. That holds for features too: they talk through ports the
+    application wires, and "features can also have ports and be wired together" (§2.2).
+  - **Upward edge:** the callee sits in a higher, more concrete layer. It's the worst kind. Write it
+    `^f` when it's indirect but still found by the lower module itself: a hardcoded higher module, a
+    registered process name, a topic it knows. By contrast, a function, module, or handler that the
+    composition passes *down* is not an upward edge: it's a port, and it's Spray's legitimate way to
+    call up the layers ("executing a lambda expression that has previously been passed in", a
+    callback, the observer or strategy pattern, §4.4.1).
+  - **Who sets up the callback decides.** Set up by the layer above: legal. Set up by the receiver
+    itself is a peer edge in disguise, and forbidden. That covers a receiver registering with a
+    sender, or subscribing to a public event: "receivers never register themselves to a sender, or
+    to a public event" (§4.4.2). Between peers the observer pattern only reverses a dependency that
+    ALA doesn't have, so ALA wires instead. The one place Spray keeps an observer is *inside* a
+    paradigm interface, for traffic running against the wire's direction, where "the subscriber
+    does not know the publisher". In Elixir terms:
+    - A feature or domain module calling `Phoenix.PubSub.subscribe/2` (or a `Broadcast.subscribe`
+      wrapper) on a topic it hardcodes is the defect. The composition (a LiveView's `mount/3`, a
+      supervisor's wiring, a wiring function) subscribes and routes, or passes the topic down as
+      configuration.
+    - A `handle_info/2` in the composition that receives the message and hands it on is fine.
+    - `send(SomeName, msg)` or a `Registry` lookup by a name the sender knows is the sender naming
+      its destination (R9). The composition should give it a pid or a port instead.
+  - **Not edges:** calls *inside* one abstraction (a module and its helpers, a feature and its own
+    submodules). They are the abstraction's inside, a little ball of mud it's allowed to have.
+  - **Working chains in the application:** the application is one abstraction, so R1 doesn't flag
+    its internal calls. But a product-knowing function that does *work* (computes, stores,
+    decides) and is called by another such function is a chain of collaborating parts. That's the
+    shape of the bad thermometer, `[thermo] → [thermo]` where the callee isn't wiring. Each part
+    is either a real abstraction, which belongs in a lower layer with its product knowledge hoisted
+    out (R3), or it's wiring, which belongs in the composition. A composition split into several
+    *wiring* functions is fine.
+  - **Tags and layers must agree.** The `[tag]` records what a function *knows*; the layer records
+    where it *sits*. A product tag belongs only in layers that know the requirements (Application,
+    Features). `[]` belongs in Domain Abstractions and below. A tagged function in a lower layer
+    is a leaked requirement (R3's tripwire). A generic function in the application layer is a
+    candidate to push down.
+  - **Depth is normal.** Three or four layers is Spray's usual stack, and features sit *under* the
+    application: both are tagged, and app → feature drops. The smell is not depth. It's a peer or
+    working chain, as above.
+  - **On a whiteboard** with one tag and no layer map, the two-layer case still reads straight off
+    the tags: `[thermo] → []` drops, `[] → [thermo]` is upward, `[] → []` between two different
+    abstractions is a peer edge, and `[thermo] → [thermo]` is a working chain unless the callee is
+    wiring.
+  - "Significantly more abstract" is Spray's actual test. Layers approximate it. An edge that drops
+    only a notch (a helper barely more general than its caller) is what R7 and helper proliferation
+    examine.
+  - *Spray:* Summary ("All dependencies are knowledge dependencies", "Good and bad dependencies",
+    "Emerging layers"); §2.1.3; §2.2; §3.4 (and §3.4.6, knowledge dependencies reach all layers
+    below); §4.4.1–4.4.2 (callbacks and registration); §7.15 (features).
 - **R2 — wires meet only at the top.** A `pN` may appear in two functions' bodies only if one of
   them is the composition that passed it. The same `pN` (especially `*pN`) inside two *sibling*
   subtrees means two peers share its meaning — the meaning belongs in the wiring.
+  - *A wire joining many ports* is a smell of its own: "a new abstraction may be waiting to be
+    discovered", like the ground symbol on a schematic. Spray's example is a game score that most
+    instances interact with: make it a domain abstraction in the layer below instead of wiring
+    everything to it (§3.6.1). See R10's aggregate case.
+  - *Spray:* Summary ("Communication between instances of peer abstractions"); §3.8 (no data
+    coupling); §7.8.
 - **R3 — application literals live at the composition line.** Application literals (product-specific
   constants: thresholds, prices, labels, formats) appear as *arguments* in the top function
   (`f4(p1, 4, 8.3)`), never inside a `[]` leaf. A literal buried in a leaf silently converts `[]` to
   `[thermo]` — the tag was lying. The contrast is an *intrinsic literal* (an identity or a physical/
   mathematical constant that is part of the abstraction's own definition), which correctly stays put.
+  - *Spray:* §1.6.3 (literals at the composition); §2.4; §3.5 and §3.5.2 (the application specifies
+    the rounding, filter bandwidth, and resampling rate when it instantiates the abstractions).
 - **R4 — `$` is legitimate only inside a `[]` leaf** (state that *is* the abstraction's concept:
   a filter's memory, a sampler's counter). `$` on a tagged function is invisible coupling through
-  time between application steps. The FP endpoint removes even the leaf `$` by threading state as
-  a wire: `{p3, s'} <- f5(s, p2)`.
+  time between application steps. State belongs with the abstraction whose concept it is: Spray
+  "prioritizes abstraction over referential transparency", because passing a filter's running
+  value in on every call "breaks an otherwise good abstraction". Whether that state is held (a
+  process, or a struct returned inside the updated program) or passed in and out is a case-by-case
+  execution choice, not a compliance level. What R4 forbids is state whose meaning leaks out of its
+  owner: the app or a peer keeping, reading, or computing the raw state itself (`f5(s5, p2)`, where
+  the app holds `s5`). In Elixir a changing instance comes back as a new value, and storing that
+  opaque value again is not a breach, because the concept still owns what is inside it. (Re-storing
+  every instance by hand is the §1.6.3 "handling the data" cost that "Past the pipe" moves beyond.)
+  State that no abstraction owns becomes its own abstraction (Spray's `State<T>`), wired in like
+  any other.
+  - *Spray:* §3.9 (state joins the struct of the concept it belongs to; `State<T>`); §3.10 (the four
+    reasons for objects); §3.11.2 (abstraction before referential transparency).
 - **R5 — every `qN` must be promoted or deleted.** A contract that exists only as two matching
   literals (a format string produced here, parsed there; a name emitted here, matched there) is
-  an edge the call tree cannot show. Either both ends take it as a parameter from the
-  composition, or it becomes a declared, named thing both depend on downward. (This is the same
-  rule the amazin variants enforce mechanically as `Web.Contracts` + `ContractPurity`.)
+  an edge the call tree cannot show. Spray's rule is that "no two modules know the meaning of data
+  or a message" (§7.8). An element knows one thing, and "no other elements should know about this
+  one thing" (§7.25). His fixes, in order of preference:
+  1. **Keep the meaning in the composition.** Both ends take the name or format as configuration
+     from the layer that wires them, so only the composition knows the two agree. (The thermometer's
+     number format is set at the composition, not agreed between the formatter and the display.)
+  2. **Make both ends one abstraction.** If a sender and a receiver must share a meaning, "they are
+     two instances of the one abstraction". One module owns the format and does both the encoding
+     and the decoding (a protocol codec, an `encode/decode` pair), and each end uses an instance of
+     it. They may be deployed apart, but in the logical view they are one abstraction.
+  3. **A shared name in a lower layer, only if it is truly abstract.** A name both sides depend on
+     downward is legitimate only when a great many abstractions use it (Spray's example is an
+     `initialize` event, §4.7.4). A module of names shared by a handful of peers is a registry of
+     global event names. Spray calls those "symbolic wirings": you "search for where the names
+     appear throughout the entire code". It fails, even though every edge to it drops.
+  - *In Elixir:* a `Contracts` module of event, stream, and hook names is fine when only the
+    application uses it: the page's HEEx, its handlers, and the JS hooks it owns. That is Spray's
+    `temperature` symbolic connection, kept inside one abstraction. It turns into the registry
+    smell when feature or domain modules use it to agree with each other. (The Elixir variants'
+    `Web.Contracts` + `ContractPurity` mechanize single-sourcing names. Whether a given use is
+    app-owned or a registry is the question above.)
+  - *Spray:* §3.8 (no data coupling); §4.7.4 (global event names are symbolic wirings); §7.8 (two
+    instances of one abstraction); §7.25 ("no other elements should know about this one thing").
 
 Anything that survives R1–R5 and still can't be given a general, product-free name is not an
 abstraction — inline it into the composition as `(p) ->` wiring (R4's twin, Spray's "func1 is
@@ -112,6 +227,21 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     only factors out common code, it is not an abstraction — look harder. (2) Is it **almost binary**:
     can a reader *use* it without following the reference into its body? If they must chase it to keep
     understanding, you do not have an abstraction, and the decoupling makes the code read *worse*.
+  - *What do you know about?* Ask each module and function; "the answer should always be 'I just
+    know about…'". Two refinements from Spray: an element "may know how to do an operation on some
+    data, or the meaning of some data, but not both", and "no other elements should know about this
+    one thing" (§7.25). A module that both defines what an order means and computes shipping on it
+    knows two things.
+  - *Document the concept.* Spray calls it "critically important to add comments that make it
+    learnable by explaining the concept it provides, its ports, its configurations and an example of
+    its use" (§2.1.1). In Elixir that's a short `@moduledoc`: one or two lines naming the concept,
+    its ports, and its configuration, plus a usage example when it isn't obvious. That's enough, and
+    it fits a sparse-comments style. The body doesn't need narrating.
+  - *Spray:* §1.6.3 ("func1 is not an abstraction"); §2.1.1 (an abstraction must be "learnable as a
+    concept"; document concept, ports, configuration, example); §7.2.5 ("a good abstraction
+    separates the knowledge of different worlds"); Summary and §3.4 (a good abstraction is one where
+    you "don't need to follow the indirection"); §7.23 (symbolic indirection without abstraction);
+    §7.25 ("What do you know about?").
 - **R7 — every abstraction earns its existence.** A separate abstraction should be *significantly*
   more general than its caller, denote a concept worth naming, and not be premature extraction.
   Prefer few meaningful abstractions to many trivial ones. R7 is the deliberate counterweight to
@@ -128,15 +258,19 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
   abstractions.
   - *Verify (the complement of proliferation):* a real abstraction is a **cohesive whole**, *not*
     internally decomposed into named semantic sub-parts (inside, it is "a small ball of mud" where
-    every line serves the one concept), and small enough to **read in isolation** (~500 lines is a
-    rough cap; the real test is "readable alone"). Over-splitting a real abstraction's internals is as
+    every line serves the one concept), and small enough to **read in isolation** (Spray's rule of
+    thumb is 100 to 500 lines; the real test is "readable alone"). The lower bound matters as much
+    as the upper one: if abstractions *average* under 100 lines, there are probably more of them than
+    needed, which is helper proliferation seen from the size side. Many ports is also a signal:
+    "abstractness decreases with more ports" (§7.2.3), so a module with a long list of inputs and
+    outputs is probably too specific to be a good abstraction. Over-splitting a real abstraction's internals is as
     much an R7 defect as inventing a trivial one. And **reuse is a positive**: never let R7, height,
     or the pass-through check flag a genuinely shared abstraction — high fan-in is evidence it earns
     its place.
   - *Little balls of mud, and why the interior is not scored.* ALA governs the relationships
     **between** abstractions, not the purity of each one's insides. The interior of an abstraction may
     be a little ball of mud: procedural, branchy, decomposed into private helpers, and that is fine as
-    long as the abstraction (a) names **one concept** (R6), (b) stays **bounded in size** (~500 lines),
+    long as the abstraction (a) names **one concept** (R6), (b) stays **bounded in size** (100–500 lines),
     (c) keeps its internals **private behind a small public surface**, and (d) is **clean at its
     boundary** (R1, R2, R5, R9, R10 all hold where it meets other abstractions). Because of this, the
     structural checks operate on the graph of *abstractions* (modules and their public functions), not
@@ -145,6 +279,11 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     keep a *little* ball of mud from quietly becoming a *big* one are (a) through (c): a module that
     stops being nameable, blows the size cap, or exposes a wide public API has leaked its mud outward,
     and *that* is the defect the checklist catches, not the internal mess.
+  - *Spray:* Summary, "All abstractions must be small" (a rule of thumb of 100 to 500 lines;
+    averaging under 100 means "more abstractions than we need"); §7.10.2 ("probably in the range of
+    50 to 500"); §7.2.3 ("abstractness decreases with more ports"). Spray makes size a fundamental
+    constraint; this checklist and `ala_lint` score it as advisory (see "Where this checklist
+    departs from Spray").
 - **R8 — the composition reads as the requirements; names and shapes serve the reader.** The top
   layer should read like the spec; config keys should name what they configure; state wires should
   be shaped for a reader. **R8 is judgement, not shape** — "reads as the requirement" cannot be
@@ -155,47 +294,212 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
 
 The next three rules were promoted from Spray's guide because each is a *constraint of its own*, not
 background for an existing rule.
+  - *Spray:* §2.4 (executable expression of requirements; 3–10% of the code); §3.5; §3.6 (diagrams
+    vs text); §7.7.
+- **R9 — ports are typed by a programming paradigm; an abstraction owns no interface except its
+  own configuration.** Spray calls the second half "critically important" (§2.3.4).
+  - **Main interface and ports.** A module's own public API (its constructor, its configuration,
+    the struct fields set when it is created) is there for the layer above, to instantiate and
+    configure it. Every other input and output at run time goes through a *port*, and a port's type
+    is a programming paradigm from a lower layer. "No other interface implemented or required by the
+    class can be 'owned' by the class."
+  - **Owned interfaces fail, both directions.** A *required* interface is one the consumer defines
+    for others to implement (Clean Architecture's ports, the dependency inversion pattern). A
+    *provided* interface is one a module defines, specific to itself, for its peers to call. Both
+    carry one module's design inside the other, "a fixed arrangement between the two". Moving the
+    interface to a module of its own doesn't help if it still describes what one module needs:
+    "simply moving IB doesn't make it more abstract" (§6.5.5).
+  - **`@callback` and `defprotocol` in Elixir.** What matters is who defines the interface relative
+    to who implements and calls it.
+    - *Allowed: a paradigm port.* A behaviour or protocol in the Programming Paradigms layer that no
+      domain abstraction owns (`Step`), implemented by domain modules (`defimpl Step, for:
+      LowPassFilter`). This is how a domain abstraction gets a port.
+    - *Allowed: configuring a more abstract module.* A module far below its implementers defines
+      callbacks that higher modules implement to configure it. `GenServer`'s `init/1` and
+      `handle_call/3`, `Plug`'s `call/2`, or a generic scheduler that takes a job module. The
+      implementer depends *down* on it, which is legal. It's the behaviour-shaped form of Spray's
+      "lambda passed in" for calling up the layers.
+    - *Not allowed: a required interface between peers.* `Checkout` defines
+      `Checkout.PaymentGateway` with `@callback charge/2`, and `StripeClient` in the same layer
+      implements it. The behaviour describes what `Checkout` needs, so `StripeClient` is written to
+      `Checkout`'s design. Moving it to a shared `Contracts` module doesn't change that. The ALA
+      route is a paradigm-typed port on `Checkout` (request/response, say) that the composition
+      wires to a payment abstraction.
+    - *Not allowed: a provided interface made for peers.* `Inventory.Behaviour`, describing
+      `Inventory`'s own functions, so peers can call it through the behaviour or mock it with Mox.
+      Its callers are still written to `Inventory`'s design. Spray's testing rule is to "mock the
+      ports": wire a fake instance to a paradigm port in the test, not replace a peer by name.
+  - **Composing functions.** When the composition calls functions directly, "parameters and return
+    values are effectively ports", and so is a function passed in (§2.3.6). The same rule applies to
+    their types.
+  - **Data on a port, and data-transfer structs.** Two domain abstractions "may not ... share a
+    DTO". The type "must be more abstract and come from a lower layer", often a primitive, and "T may
+    be passed in by the application" (§4.8.1).
+    - *Allowed: standard types* (numbers, strings, lists, maps, and tuples in the paradigm's own
+      shape, like `{:emit, out, step}`).
+    - *Allowed: a struct from a lower layer that is itself a real abstraction,* such as `Decimal`,
+      `Date`, or a domain `Money`. Both ends depend down on it, a knowledge dependency.
+    - *Allowed: an application-defined struct passed in.* The app defines it, and the abstraction
+      either carries it without matching on its fields or reaches its fields only through what the
+      app configures it with (field names, accessor functions, a protocol implementation). This is
+      Spray's "T passed in by the application".
+    - *Allowed: a struct used only inside one abstraction* (a feature and its own submodules).
+    - *Not allowed: a data-transfer struct between peers.* `Cart` builds a
+      `%Checkout.OrderRequest{}` defined by `Checkout`, which pattern-matches on it. Or both match on
+      a struct neither owns but which was designed for exactly their exchange. Either way one
+      abstraction's design now lives in the other. Moving the struct to a shared module in the same
+      layer doesn't fix it, for the same reason as a moved interface.
+    - *Fixes:* the composition converts between the two shapes with a `(p) ->` lambda; the
+      application supplies the type; or the two ends become two instances of one abstraction that
+      owns the format (§7.8, see R5).
+    - *R9 vs R10:* R9 is about the message type on a port between two abstractions. R10 is about a
+      domain entity that two features both read.
+  - **Outputs announce; they don't command.** "An output port from an abstraction may say 'This has
+    happened' or 'Here is my result', not 'do this next', or 'here is your input'" (§7.2.6). What
+    happens next is the wiring's business. The one exception is request/response. Wired point to
+    point, "a request is implicitly a command" (§4.6), and that's fine because the application set
+    up the wire. In Elixir terms, an outcome a feature returns should read as a fact or a result
+    (`{:item_removed, item}`, `{:ok, total}`), not as an instruction to a named receiver.
+  - **Unresolved: paradigm instructions as outputs.** A common Elixir pattern has features return
+    outcomes such as `Outcome.stream_insert(:cart, item)` or `Outcome.flash(:info, msg)`, which a
+    generic interpreter then carries out. Two readings, not yet settled:
+    1. *It's a request on a wired port.* The outcome is addressed to a paradigm (streams, flash), not
+       to a peer. The page wired the feature's outputs to the interpreter, so this is Spray's
+       request/response case, where "a request is implicitly a command" (§4.6). It passes R9.
+    2. *It's a command.* The feature decides what should happen next ("insert this into the cart
+       stream"), which is "do this next" rather than "this has happened" (§7.2.6). The feature also
+       knows the stream's name, which is the page's wiring knowledge. On this reading the feature
+       should announce a fact (`{:item_added, item}`), and the page should wire that fact to a stream
+       insert.
 
-- **R9 — ports carry paradigm-typed data; an abstraction never names its own I/O endpoints.** An
-  abstraction's inputs and outputs connect only through wires the composition sets. Its ports are
-  typed by a *paradigm* (a data value, an event, a stream, a state), never by a sibling's identity or
-  a domain struct, and it never references where its input comes from or where its output goes.
-  *Visible shape:* a `[]` leaf takes only `pN` wires or `(p) ->` lambdas and has **no edge that names
-  a peer**; a wire that carries a *named domain struct* across an abstraction boundary is the smell
-  (the boundary now leaks domain meaning — this is why Clean Architecture's "required interfaces" are
-  not ALA). *Verify:* for each abstraction, ask "does it name the source or destination of any
-  input/output?" and "is any port typed by the domain rather than a paradigm?" Either is a defect.
-  *Mechanizable:* partly — a `[]` function that references a peer module is already an R1 edge; a
-  domain-typed port needs type analysis.
+    Reading 1 is simpler and matches the V10/V36 designs. Reading 2 is closer to Spray's text and
+    moves more wiring into the page. Until this is settled, treat named-stream outcomes as an R9
+    question for a reviewer, not a pass or a fail.
+  - **No endpoints.** An abstraction never names where its input comes from or where its output
+    goes. Receivers never register themselves with a sender or subscribe to a public event (§4.4.2).
+    The composition sets every wire.
+  - *Visible shape:* a `[]` leaf takes only `pN` wires, `(p) ->` lambdas, and configuration, and
+    **no edge names a peer**. The smells:
+    - a port typed by a peer's struct;
+    - a behaviour or protocol defined in a feature or domain module and used across a boundary;
+    - a module that names its own source, destination, or topic.
+
+    *Verify:* for each abstraction, ask three questions:
+    - Does it name the source or destination of any input or output?
+    - Does any port's type belong to a peer rather than a paradigm, the standard library, a lower
+      layer, or the application?
+    - Does it define a `@callback` or protocol that its own peers implement or call (rather than a
+      paradigm port, or callbacks that higher modules implement to configure it)?
+
+    Any yes is a defect.
+  - *Mechanizable:* partly. A `[]` function that references a peer module is already an R1 edge.
+    Behaviours and protocols declared outside the paradigm layer and used across a boundary can be
+    found from the AST. A peer struct being pattern-matched is findable. Whether a type is "more
+    abstract" is a judgement.
+  - *Spray:* §2.3.4 (interfaces; owned interfaces "critically important"); §2.3.6; §4.4.2; §4.6
+    (request/response); §4.8.1 (no DTOs; T passed in by the application); §6.5.5 (dependency
+    inversion); §7.2.6 (outputs announce); §7.8; §7.24.
 - **R10 — no shared entity; share an identity, keep data private.** No domain struct that carries an
   app-identity's data may be read or destructured by two features. Features share only an *identity
   key*; each keeps its own private data against it, so a new feature is a new data migration, not
   edits across the others. *Visible shape:* a `*pN` (shared value) whose type is a named domain entity
   appears inside two sibling feature subtrees. *Verify:* is any domain struct type referenced or
   destructured by ≥2 feature-layer modules? *Mechanizable:* yes — flag a struct type used across ≥2
-  features. (This is exactly what the amazin variants' boundary projection and typed facts prevent.)
-  - *The aggregate case (a judgement, not a hard defect):* a struct in a *shareable* (peer-ok)
+  features. (This is exactly what the Elixir variants' boundary projection and typed facts prevent.)
+  - *The aggregate case (a judgement, not a hard defect):* Spray's own version is the ground
+    symbol (§3.6.1): state that most instances interact with, like a game score, can legitimately
+    become a domain abstraction one layer down that everything depends on as knowledge. So a
+    struct in a *shareable* (peer-ok)
     layer read by ≥2 features may be a legitimate domain abstraction (a knowledge drop, fine) **or**
     Clean Architecture's shared-Entity coupling (bad). A tool cannot tell them apart, so treat a
     shared *feature-tier* entity as a defect (above) but a shared *domain aggregate* as a prompt for a
     human. `ala_lint` reflects this split: the feature-entity check is scored; the shared-aggregate
     check runs only under `--strict`/`--super-strict` (advisory under strict, scored under
     super-strict).
-- **R11 — the application (top) layer is composition only.** The top layer instantiates, configures,
-  and connects; it holds *all* app-specific knowledge and *no* app-specific logic. Spray's ideal: no
-  assignments, no if-statements, ~3–10% of the code, reading as the requirements. *Visible shape:*
-  every line in an `[app]` function is an edge, a `pN`, or a `{app-literal}` — never a branch. *Verify:*
-  what fraction of the code is the top layer, and does any top-layer function branch beyond sequencing
-  wiring? *Mechanizable:* yes (top-layer size %, branch count in top-layer functions). *Relaxation:* a
-  source-encoded app layer (a LiveView `handle/3`) may branch to sequence cross-feature follow-ups;
-  keep the spirit — logic lives below, the top layer connects and configures.
+  - *Spray:* §3.8 (no data coupling) and §4.8.1 (no shared DTOs). The identity-key form is this
+    checklist's Elixir adaptation, not Spray's wording.
+- **R11 — the application (top) layer is composition only.** The application instantiates,
+  configures, and connects. It holds *all* app-specific knowledge and *no* app-specific logic: "no
+  normal programming language code such as assignments and if statements" (§3.5), and about 3–10%
+  of the code (§2.4). Spray's own examples show what that sentence covers and what it doesn't.
+  - **Not banned:**
+    - *Naming an instance so it can be wired twice.* `temperature = new FloatField()` (§1.6.6), or
+      locals for cross-connections (§3.6.2).
+    - *A predicate or small function passed in to configure a generic abstraction.* For example
+      `new Filter(x => x>=0)` (§3.11.3), or `.Bind(x => x==0 ? -1 : 1000/x)` (§6.1.3). That states a
+      requirement ("ignore negative readings") once, as configuration. The abstraction runs it.
+  - **Banned:**
+    - *Control flow that decides what runs:* a guard around a call, a loop over data.
+    - *Assignments that hold or compute data between calls.*
+
+    Spray flags his own §1.6.3 thermometer for this: the application "is still doing some logic
+    work - the 'for loop' and 'if statement', which we will address soon".
+  - **Where each kind of `if` goes.** These are Spray's moves, in order of how often they come up:
+    1. *Propagation guards* ("only if there's a value", "stop on error") move into the connection
+       mechanism. He factors the `if`s "into the Compose function" (Bind, §6.1.3), and his
+       thermometer's `if` disappears once `SampleEvery` simply emits nothing (§1.6.4). In Elixir:
+       a step returning `{:quiet, step}`, `with`, `Stream` filtering.
+    2. *Requirement conditions* ("brew only if the pot is on and the boiler isn't empty") become
+       wired instances: logic abstractions like the coffee maker's AND gate (§2.9.3), or a generic
+       abstraction configured with a predicate (§3.11.3).
+    3. *Conditions that depend on history* become a state machine (§4.16; "event-driven often goes
+       hand in hand with state machines", §4.7.2).
+    4. *Choosing a path by outcome* becomes an abstraction with two output ports that the
+       application wires separately. His activity-flow `If` wires a condition's `donetrue` and
+       `donefalse` ports (§4.9.1, which he marks experimental).
+    5. *The order of follow-ups* ("record the undo, then start the timer") is fan-out wiring. Make
+       the order explicit where it matters (§4.4.4).
+  - *Visible shape:* every line in an application function is an instance, a wire, a literal, or
+    configuration. The tool stamps `(branches)` on an application function that branches. A reader
+    then classifies each branch as a guard, a requirement condition, history, an outcome route, or
+    ordering, and moves it as above. A branch that fits none of these is logic that belongs in a
+    lower layer.
+  - *Verify:* what fraction of the code is the application? For each branch or data assignment in
+    it, which of the five kinds is it, and has it been moved?
+  - *Mechanizable:* partly. The share of the code is mechanical, and so is counting branches. Telling
+    the kinds apart is judgement, though some forms are recognizable (see the linter notes).
+  - *In LiveView:* a page can't be literally branch-free, because the framework hands it events to
+    route and a lifecycle to follow. "The application layer, and where LiveView pieces sit" has a
+    table of the forms a page typically contains, and says which are wiring, which are logic to move
+    down, and which are framework-imposed departures to keep small.
+  - *Spray:* §2.9.3 (the coffee maker's application is a diagram of instances; its conditions are
+    AND-gate instances, not `if`s); §3.5 ("no normal programming language code such as assignments
+    and if statements"); §1.6.3 (the thermometer's `if` flagged as logic); §1.6.4 and §6.1.3 (guards
+    move into the connection mechanism); §1.6.6 and §3.6.2 (instance variables for wiring);
+    §3.11.3 (configuring with lambdas); §4.4.4, §4.9.1, §4.16. Reading LiveView's multi-clause
+    handlers as routing, and the framework-imposed departures, are this checklist's Elixir
+    adaptation.
 
 Rules-of-thumb for using R1–R11: R1–R2 and R5 are the coupling core; R3 is requirements-locus; R4 is
-state-as-a-wire; R9 is the port/interface discipline and R10 the data-sharing discipline (both
+state-with-its-owner; R9 is the port/interface discipline and R10 the data-sharing discipline (both
 coupling-core in spirit); R6–R7 are design minimality/nameability; R11 is the composition-only top
 layer; R8 is the human-judgement remainder. A mechanical tool (`ala_lint`) can check R1–R7 and R10–R11
 (and R9 in part) at varying precision; treat R8 as the reason a green run is necessary but not
 sufficient.
+
+One topic is *in development* and not yet a rule: how wires differ in meaning and in how they run
+(paradigms, push or pull, sync or async, fan-out, glitches, loops). See "Kinds of connection and
+how they run" under the worked examples.
+
+## Where this checklist departs from Spray
+
+The rules follow Spray, and each one cites where. These are the places where this checklist adapts
+him to Elixir or steps away from him, stated so a reader doesn't mistake them for his positions.
+
+| Departure | Spray | This checklist | Why |
+|---|---|---|---|
+| Branches in a LiveView page | "no ... if statements" in the application (§3.5) | multi-clause handlers and forwarding `case`s read as routing; `connected?/1` and auth redirects tolerated (R11, the LiveView table) | the framework delivers events and a lifecycle to the page; the departures are recorded, kept small, and never used for logic |
+| Size | a fundamental constraint (Summary) | module size is an advisory check (R7; `ala_lint` scores it only under `--strict`) | line counts are a weak proxy for "readable alone", so a reader decides |
+| Graded checks | ALA's constraints aren't graded | the linter's tiers: R7 and height advisory, R11 and public surface aspirational | lets a team adopt the checklist step by step; the tier is about scoring, not about whether a finding is real |
+| Sharing data between features | no data coupling (§3.8), no shared DTOs (§4.8.1) | R10's specific form: share an identity key, keep each feature's data private | an Elixir and database-backed reading of the same rule |
+| The notation | diagrams and wiring code (§3.6) | a text encoding with `[tag]`, `$`, `q`, and tool-stamped marks | a whiteboard- and linter-friendly way to see the shapes; it isn't Spray's |
+| Holding the program value | objects change in place | an immutable program value held by its owner (a LiveView's assigns, a GenServer) and stored back after each run ("Past the pipe", R4) | Elixir has no mutation; holding the value is not handling the data |
+| Processes | prefers single-threaded solutions (§4.4.9) and treats the execution model as a wiring-time choice | pure composition values first; processes only where the concept is concurrent | consistent with Spray, and with Elixir's own guidance against "code organization by process" |
+| Comments | "critically important" abstraction comments (§2.1.1) | a short `@moduledoc` naming concept, ports, configuration, and an example when needed (R6) | covers what Spray asks for without narrating bodies |
+
+Earlier versions of this checklist split the LiveView application into shell → page → view
+sub-layers. That was a departure without a reason, and it's gone: see "The application layer, and
+where LiveView pieces sit".
 
 ## Enforcement tiers (what a linter scores, and when)
 
@@ -251,8 +555,9 @@ abstraction-quality tests) are captured as R6–R7 and R9–R11, not repeated he
   not by tier** (splitting UI-from-logic-from-storage couples them, since UI shapes logic). **Layers
   replace hierarchical containment** — flat, no nesting, no sub-abstractions. **No inheritance** (it
   is usually "lazy composition"; replace with explicit pass-through — a subclass is more specific and
-  must know its parent, an upward dependency), **no global event names, no subscribing to a specific
-  sender** (those are peer edges in disguise; the composition wires them).
+  must know its parent, an upward dependency), **no global event names, no receiver subscribing itself** to a
+  sender or a public topic (those are peer edges in disguise; the composition wires them). A
+  callback the composition passes *down* is fine: that is how ALA calls up the layers.
 - **Ports go sideways into technical domains (behind R9).** Database, hardware, and network are
   run-time dependencies off to one side, reached through paradigm ports (Hexagonal spokes), not
   bottom layers and not downward adapters. Keep a *domain abstraction of* the DB or UI (configurable,
@@ -271,6 +576,12 @@ abstraction-quality tests) are captured as R6–R7 and R9–R11, not repeated he
   threads; cross-thread wiring is async (GALS — the BEAM default).
 
 ### Procedure — build a new ALA program
+
+Two roles, even when one person plays both, "wearing only one hat at a time" (§5.7). The
+*architect* works from the requirements, expressing each as a wiring of instances and inventing the
+domain abstractions it needs. The *developer* implements those abstractions, which "know nothing of
+the requirements". Most of the hard thinking is the architect's, including designing paradigm
+interfaces that work "between any two domain abstractions for which it may be meaningful".
 
 1. **Iteration zero (≤ one sprint, whatever the project size).** Go through requirements one by one,
    fast (aim ~one feature/hour), *describing* each as a wiring of instances and **inventing domain
@@ -323,6 +634,15 @@ human tests it cannot. Fail any and it is not ALA.
 6. **No domain abstraction encodes data meaning or shares an entity** with a peer (R5, R9, R10).
 7. Tracing a user story needs **no all-files search and no run-time debugger** — the flow is explicit
    and cohesive in one place (R1, R8).
+8. **Tests follow the layers:** "you always test with dependencies in place, but you mock the
+   ports" (Summary). A knowledge dependency is never mocked, just as you wouldn't mock a square root.
+   - *A domain abstraction's unit test* uses its real lower-layer dependencies, and wires fake
+     instances to its ports.
+   - *Testing the application* with its real domain abstractions "is exactly acceptance testing".
+   - *In Elixir:* don't Mox a lower-layer module. Pass a fake instance or function into the port
+     (a `Step` struct, a function passed in, a test process as the output pid). A LiveView test of a
+     page with its real features is the acceptance test. A test that must replace a *peer* by name
+     is a sign the peer was never behind a port (R1, R9).
 
 ## Helper proliferation: the real problem R7 is chasing
 
@@ -428,25 +748,103 @@ locate functions, they are not a compliance unit. (Nested modules are *qualified
 module — `defmodule Address` inside `…CheckoutFlow` is `…CheckoutFlow.Address` — so a feature and its
 own nested value-objects read as one unit and their calls are cohesion, not peer coupling.)
 
-### The application layer is a special case (and so is LiveView)
+### The application layer, and where LiveView pieces sit
 
-Spray's ALA singles out the top **application/composition layer**: it is *wiring*, not abstraction,
-so it is the one layer where a function may legitimately call a **peer** — the composition's whole
-job is to connect abstractions to each other. The checklist and linter both honour this, and a few
-related accommodations matter especially for LiveView, where the variants show the application layer
-is not flat but has **sub-layers** (shell → page/composition → view/components):
+Spray treats the application as **one abstraction** whose content is wiring and configuration. The
+knowledge of what flows between its parts is "contained together inside the Thermometer
+abstraction". It has no internal structure of its own: "there are no subfolders under the
+application" (§5.4). A bigger app becomes a composition of **Features**, a layer of their own that
+the application wires. So calls between the application's own functions are internal to one
+abstraction, not peer edges (R1). The one caution is R1's working-chain clause: product functions
+doing work and calling each other.
 
-- **Peers are allowed in the application layer.** Declare that layer `peer_ok: true`; same-layer
-  calls there are not flagged. Feature and domain layers stay `peer_ok: false` (peer coupling there
-  is the classic smell). When a human runs the checklist, apply the same rule: a same-altitude call is
-  a violation *below* the composition, and expected *at* it.
-- **Sub-layers are just more layers.** To model shell-above-page-above-view, declare them as
-  separate ordered tiers (each `peer_ok: true`). Then shell→page→view all *drop* and are fine, while
-  page→shell would be flagged as upward — which is exactly right. The linter supports as many tiers
-  as you declare; there is nothing special-cased about "app," only about `peer_ok` and order.
+**Where each LiveView piece belongs.** A LiveView page is not a stack of application sub-layers
+(shell → page → view). Only the page-specific parts are application:
+
+| Piece | Layer | Why |
+|---|---|---|
+| The page's LiveView module (`mount/3`, `handle_event/3`, `handle_info/2`, `render/1`) | Application | it knows this page's requirements and wires everything else |
+| The page's HEEx template | Application | the UI half of the diagram: nesting is the "display inside" wiring |
+| The router | Application | it composes pages |
+| Page-specific components used only here, which know the product | inside the page (Application), or a Feature if it has its own state and ports | part of the page's wiring, or a feature the page wires |
+| Feature modules, feature LiveComponents | Features | product-knowing, and wired by the page |
+| Generic function components (`core_components.ex`, `<.button>`, `<.table>`) | Domain Abstractions (UI) | product-free, reusable, configured by attrs and slots |
+| A generic shell, effect interpreter, or runner (V35/V36's `EffectInterpreter`, a `use PageShell` dispatcher) | Programming Paradigms | an execution model: it knows how a kind of connection runs, not what this page does (Spray keeps "Execution models.doc" in this layer) |
+| `Phoenix.LiveView`, `Phoenix.Component` | Programming Paradigms / Foundation, library-provided | LiveView's event → state → render loop is an execution model; a page implementing its callbacks is configuring a more general module (R9) |
+
+Two consequences:
+- **A generic shell sits *below* the page, not above it.** When it calls back into the page's
+  callbacks, that's the passed-in callback case (R1, R9), not an upward edge. A page that uses the
+  shell is dropping.
+- **Generic view components aren't application code** even when only one page uses them so far.
+  If a component would read the same in another product, it's a domain UI abstraction. A component
+  that knows this page's data or events is part of the page.
+
+**Getting the application right in a LiveView app.** This is where most of an Elixir app's ALA
+quality is won or lost, because the page is the one place that is allowed to know everything.
+
+- **Split a shell into the generic part and the page part.** A shell that interprets outcomes or
+  effects (flash, stream insert, timer, patch) is a generic execution model: move it into the
+  Programming Paradigms layer, product-free and shared by every page. The part that names this
+  page's composition (dispatching an event to `CartPage.handle/3`, say) is page code. The page then
+  depends down on the interpreter, and nothing below the page names a page (§2.9.2, §4.2).
+- **Keep the page to wiring and configuration.** The page's callbacks connect events and data to
+  features and domain abstractions and carry the application literals (R3). They don't compute,
+  store, or decide (R11; §3.5). A `handle_event/3` that runs a feature and hands its result to an
+  interpreter is wiring. One that works out a total is not.
+- **The template is the UI diagram.** Nesting in the page's HEEx is the "display inside" wiring
+  (§1.6.6, §4.12). A page-level `:if` or `for` is application logic. Sometimes it's unavoidable, and
+  sometimes it's a missing component or a missing feature. Ask which (R11).
+- **Push product-free markup down.** A component that would read the same in another product is a
+  domain UI abstraction, even with one caller today (R7 asks whether it earns its existence).
+  Keep only the markup that knows this page in the page.
+- **Keep symbolic connections inside the page.** An assign name that the wiring writes and the
+  template reads is Spray's `temperature` connection (§1.6.6). It's fine inside the page, where both
+  ends live. A name that features or domain modules must also know goes through R5.
+- **Features are wired by the page, not by each other.** Feature modules and feature
+  LiveComponents are Features-layer instances. The page gives each one its inputs and routes its
+  outputs (§7.15; R1, R5). A feature LiveComponent that reaches for a sibling's state
+  or a named topic breaks R1 or R10.
+- **Subscriptions and timers are set up by the page.** `mount/3` subscribes and routes messages to
+  features, or passes a topic down as configuration (R1, §4.4.2).
+- **Generated glue is application code.** If a manifest or diagram generates the page's wiring, the
+  generated code belongs to the application, like Spray's generated wiring code, which "lives in a
+  subfolder from where the diagram is, because it is not source code" (§2.5.1). The generator is a
+  tool, outside the app's layers.
+
+**`if`, `case`, and assignments in a LiveView page.** R11 gives Spray's reading, and the moves for
+each kind of `if`. Here is how that applies to the forms a page actually contains. The
+"wiring" verdicts on multi-clause handlers and `case` routing are this checklist's Elixir reading,
+not Spray's words.
+
+| Form in the page | What it is | What to do |
+|---|---|---|
+| Multi-clause `handle_event/3` or `handle_info/2`, one head per event | routing: each clause is a wire from an event to an input | keep each clause to forwarding |
+| Decoding params (`%{"id" => id} = params`, `String.to_integer/1`) | adapting the browser's event format, a technical domain wired sideways (§7.17) | fine when small; if it repeats, a generic param-casting abstraction configured per event |
+| `assign(socket, :x, value)` where `value` is an abstraction's output | the point where dataflow lands (§1.6.6) | nothing |
+| `assign(socket, :total, Enum.sum(...))`, or any arithmetic in the page | data handling | move it into the feature or domain abstraction, and assign its output |
+| `if` or `case` on `nil`, or on `{:ok, _}`, just to decide whether to go on | a propagation guard | `with`, or a runner that stops on `:quiet` or an error (§6.1.3) |
+| `case` whose arms only send the ok and error results to different places | routing two output ports (read from §4.9.1) | acceptable as wiring; better still, the feature returns outcomes that an interpreter routes |
+| `if`/`case` with computation in its arms, or a business rule (`if total > 100, do: free_shipping`) | application logic | a domain abstraction, or a predicate configured at the page (§3.11.3); a state machine if it depends on history (§4.16) |
+| Several feature calls in one clause (remove the item, then record the undo) | fan-out wiring, written in order | fine when each call only passes outputs to inputs; say so when the order matters (§4.4.4) |
+| HEEx `:if={@flag}` on one boolean that a feature produces | a "display when" wire | fine |
+| HEEx `:if={length(@items) > 0 and @user.admin}` | application logic in the template | compute it in a feature and wire the boolean |
+| HEEx `for` over rows in the page | iteration in the application | a generic list or table component that does the iterating (§4.12; §4.8.2 for tables) |
+| `connected?/1` in `mount/3`, auth redirects | the framework's lifecycle | a departure: keep it to one line, or move auth to an `on_mount` hook, which is LiveView's own extension point |
+
+The test for the page as a whole is Spray's: a reader should find every requirement as an
+instance, a literal, a predicate passed in, or a wire, and no step where the page computes or
+decides for itself (§3.5.2). Framework-imposed branches are recorded as departures, not argued
+away.
+
+**For the linter:** declare the application layer `peer_ok: true` (its internal calls aren't
+flagged), and keep feature and domain layers `peer_ok: false`. A human applies the same rule: a
+same-layer call between two different abstractions is a violation *below* the application, and
+normal *inside* it.
+
 - **Application literals live in the composition/config tier.** R3 exempts *config layers* from the
-  literal check — by default the top layer, or any tier you mark `config: true` (so an app
-  with sub-layers can hold its "diagram config" in whichever sub-layer owns it). A human mirrors
+  literal check — by default the top layer, or any tier you mark `config: true` (so a manifest
+  module standing in for the diagram can hold the application's configuration). A human mirrors
   this by not counting application literals that sit *at* the composition against R3.
   > **"Config module / config layer" names a *place*, not a value.** It is where application
   > literals are *allowed* to live — the composition, or a manifest standing in for it — as
@@ -459,12 +857,12 @@ is not flat but has **sub-layers** (shell → page/composition → view/componen
   features; that inflates neither the pass-through detector (which needs 1-in/1-out) nor a fair
   reading of R7. Depth (abstraction height) counts *chains*, so a wide, shallow composition stays
   low — as it should.
-- **Calls *within* the application layer don't add height.** The app layer is one altitude even
-  when it has sub-layers (shell → page → view): those are wiring, not deeper abstraction. So when
-  computing abstraction height, a reader (and the linter) counts the whole app layer as **1**, and
-  height accrues only once a chain drops *below* it into feature/domain/platform. Proliferation
-  *below* the app layer still counts fully — the collapse is app-layer-specific. (Declare app tiers
-  with `app: true`; the top layer is the default.)
+- **Calls *within* the application don't add height.** The application is one abstraction, so
+  when computing abstraction height, a reader (and the linter) counts it as **1**, and height
+  accrues only once a chain drops *below* it into features, domain, or paradigms. Proliferation
+  *below* the application still counts fully. (The linter's `app: true` marks which layer that is;
+  the top layer is the default. Marking several layers `app: true` to model shell → page → view
+  sub-layers is the old model this section replaces.)
 - **The view/template layer hides contracts and calls.** `~H` markup is opaque to the AST, so
   cross-feature calls and server↔DOM contracts embedded there escape function-level R1 and R5. The
   linter's reference-level R1 advisory and the P-family supplement partially cover this; a human
@@ -478,7 +876,7 @@ extend it. The correspondence: (1) give every function its `[tag]` — the linte
 with the layer map's convention + `@ala_layer` tags (its **coverage** = how many you'd have tagged);
 (2) walk every call edge and confirm it **drops** — the linter scores this on the function graph and
 flags reference/template edges advisorily; (3) check application literals sit at the composition (R3),
-state is threaded not hidden (R4), no silent contracts (R5), names/earns-existence hold (R6/R7).
+state is owned, not hidden (R4), no silent contracts (R5), names/earns-existence hold (R6/R7).
 Where the linter stops, the human continues: right-boundary judgement, template contents, semantic
 (not textual) contracts, and whether an abstraction is the *right* one. A green linter run is the
 floor; the manual pass is the ceiling, and is always the more complete of the two.
@@ -511,9 +909,10 @@ decidable. Read each note as "what a human must still judge."
   composition layer. *Human must judge:* whether a literal is an *application literal* (should hoist) or an
   *intrinsic literal* (a validation regex, a physical constant that belongs in its
   abstraction), and whether the "composition" is really where requirements should read.
-- **R4 (state threaded, not hidden).** *Automatable:* the process dictionary; some `Agent`/`:ets`
+- **R4 (state owned, not hidden).** *Automatable:* the process dictionary; some `Agent`/`:ets`
   stashing. *Human must judge:* whether GenServer/process state is legitimate instance state or a
-  hidden cross-call channel that should have been a wire — a semantic distinction.
+  hidden cross-call channel whose state belongs to some concept's abstraction (or to a wired
+  `State<T>`) — a semantic distinction.
 - **R5 (no silent contracts).** *Automatable:* duplicated identifier strings across modules;
   (extendable to) tagged-tuple message shapes. *Human must judge:* contracts that are **invisible
   to the AST** — anything inside `~H`/templates/EEx, cross-language constants (server string ↔ JS),
@@ -591,8 +990,12 @@ module Thermometer      [this product's wiring]@app-L0
 
 `mix ala.lint` on the source and `mix ala.lint.encoding` on this encoding both report exactly two
 R11 items and nothing else: `push_reading/2` branches at the top (the two `if`s that null-guard the
-sampler and display stages), and the application layer is 33% of functions (2 of 6) — both
-*aspirational* (super-strict), so the default score stays 100/A. The `{app-literal}` on `new/1` is
+sampler and display stages), and the application layer is 33% of functions (2 of 6). The linter
+scores both only under `--super-strict`, so the default score stays 100/A. That's a statement about
+the linter's tiers, not a clean bill: by Spray's reading these `if`s are application logic. He
+flags the same `if` in his own §1.6.3 version, and it disappears at §1.6.4 when `SampleEvery`
+simply emits nothing. So the finding is real. The fix is to move the guards into the connection
+mechanism ("Past the pipe"), not to clear them as harmless. The `{app-literal}` on `new/1` is
 the thermometer's calibration; it sits at the composition (level 0), so it is correctly placed and
 raises no R3 — the encoding-linter uses the same "application literals allowed only in the top tier"
 rule the source R3 uses. No edge is upward or peer, no `$`, no `q`, no shared entity: the good shape
@@ -619,14 +1022,14 @@ f1 [thermo] :                       -- main
       p2 <- (p1[i] + 4) * 8.3      -- ⚠ R3: application literal inline, two layers down
       f5 [thermo]$ (p2)             -- SmoothTemperature: static filtered  ⚠ R4
       f6 [thermo]$ (p2)             -- ResampleTemperature: static counter ⚠ R4
-        f7 [thermo] (p2)            -- DisplayTemperature                  ⚠ R1 (depth 3)
+        f7 [thermo] (p2)            -- DisplayTemperature                  ⚠ R1 (third link of a working chain)
 ```
 
 Read the violations straight off the shape:
 
 | shape | rule | what it is in the code |
 |---|---|---|
-| every edge is `[thermo] → [thermo]` (except f3→f8) | R1 | all pieces collaborate to "be a thermometer"; you must read all of it to understand any of it |
+| every edge is `[thermo] → [thermo]` between working functions (except f3→f8) | R1 | all pieces collaborate to "be a thermometer"; you must read all of it to understand any of it |
 | `*p1` appears in siblings f3 *and* f4 | R2 | the adc-batch buffer's meaning is shared between two peers, not owned by the wiring |
 | `+4`, `*8.3` inside f4; `15` inside f6; `9/10` inside f5 | R3 | requirement constants scattered two layers deep |
 | `$` on tagged f5, f6 | R4 | hidden per-reading state inside app-specific code — invisible coupling through time |
@@ -636,7 +1039,7 @@ Note what the *un*-annotated sketch could not show: strip the tags and the bad t
 tree below look similar. The tag column plus the literal rule is what makes the difference
 mechanical rather than aesthetic — the encoding needs exactly that much semantics, no more.
 
-## Worked example 2 — the ALA thermometer (site §1.6.2–.4)
+## Worked example 2 — the ALA thermometer (site §1.6.3)
 
 `main / ConfigureAdc / GetAdcReadings / OffsetAndScale / Filter / SampleEvery / FloatToString /
 Display / foreach`:
@@ -649,7 +1052,7 @@ f1 [thermo] :                        -- the application: the ONLY tagged functio
     foreach(p1, (p) ->               -- wiring lambda: anonymous, un-numbered
       p2 <- f4 [] (p, 4, 8.3)        -- OffsetAndScale       (literals at the top ✓)
       p3 <- f5 []$ (p2, 10)          -- Filter               ($ inside a [] leaf ✓)
-      if f6 []$ (15):                -- SampleEvery
+      if f6 []$ (15):                -- SampleEvery   ⚠ R11: a guard in the app
         f8 [] ( f7 [] (p3, "#.#") )  -- Display(FloatToString(...))
     )
 ```
@@ -660,33 +1063,183 @@ the composition line; each `pN` flows only through the top; `$` survives only in
 leaves whose *concept* is stateful. The application layer now reads back as the requirement —
 which is the point.
 
-Two honest residues, so the encoding doesn't oversell:
+Three honest residues, so the encoding doesn't oversell:
 
 - `*p1` remains (the DMA buffer) — platform mechanics, tolerated at the boundary; mark it and
   say why, don't hide it.
+- `if f6` : the application still decides whether to go on. Spray says so himself: the
+  application "is still doing some logic work - the 'for loop' and 'if statement', which we will
+  address soon" (§1.6.3). It's an R11 finding, and the next section removes it.
 - `f8(f7(...))` : Display consumes exactly what FloatToString produces — a latent `q1` (the
   string-format contract). Harmless here because the composition line owns both calls; it becomes
   a real R5 violation the day Display parses the string.
 
-### The FP endpoint (why the good shape collapses into a pipe)
+### Past the pipe: Spray's next steps (site §1.6.3–1.6.6)
 
-Once every edge drops a layer, the composition is free to become *pure* composition — Spray's
-monads detour, and literally the Elixir thermometer (`Thermometer.push_reading/2` with
-`OffsetAndScale`, `LowPassFilter`, `SampleEvery`, `Display` as structs):
+Worked example 2 is Spray's §1.6.3 rung: the composition is correct, but the application still
+*handles the data*. It receives each value and passes it to the next call, and it branches on the
+sampler (`if f6`). Spray names the next goal straight away: "stop handling the data that is being
+passed from one function to another." Rewriting the loop as a pipe that threads the leaves' state
+(`p |> f4(4, 8.3) |> f5(s5, 10) |> ...`) doesn't get there. The app still handles every value, and
+now handles the leaves' state too. The pipe is a restyled §1.6.3, not ALA's endpoint.
 
-```
-{s5', s6', out} <-
-  p |> f4(4, 8.3)
-    |> f5(s5, 10)          -- state is now a wire the composition threads
-    |> maybe(f6(s6, 15))   -- conditional propagation = the Maybe bind
-    |> f7("#.#")
-    |> f8
-```
+His ladder from there, stated as goals (each keeps the ones before it):
 
-R4's `$` disappears entirely: leaf state (`s5`, `s6`) is owned and threaded by the composition,
-so time-coupling is visible as data flow. This is the FP generalization of ALA's
-instances-with-state, and it is why the encoding is FP-shaped: *a compliant tree is exactly one
-that can be rewritten as a pipe over generic stages.*
+1. **Separate composition from execution (§1.6.4).** The app *builds* a description of the program,
+   then something else *runs* it: "the first statement just builds the program. Then the second
+   statement sets it running." The app "doesn't have to deal with data", and the `if` on the sampler
+   is gone, because a stage that has nothing to pass on simply passes nothing. Conditional propagation
+   lives in the connection mechanism, not the app.
+2. **Instances with ports, wired from above (§1.6.5).** Each domain abstraction is instantiated with
+   its configuration and wired to the next through a port typed by a programming paradigm, "objects
+   with ports that you wire together like electronic components". That doesn't require OOP. Spray
+   gets there from procedural code (§3.9): a struct holds the configuration, two more fields hold the
+   wiring, and state joins the struct when it belongs to that concept. "Objects as a language
+   feature, not a design philosophy."
+3. **Several kinds of connection in one app (§1.6.6).** "Monads usually only support dataflow."
+   A real app also composes UI, events, and state-machine transitions, and "different lines in our
+   diagram have different meanings". For UI the lines "mean 'display inside'". When the composition
+   becomes a graph, the diagram is the source.
+
+What this means in Elixir. These are options, not a required form; how `ala_lint` should check
+these goals is still open.
+
+| Goal | Some ways to meet it in Elixir | Where state lives |
+|---|---|---|
+| build, then run; no data in the app | a paradigm protocol (`push(step, data) :: {:emit, out, step} \| {:quiet, step}`) with a composition value and a runner; or `Stream` stages, each a configured `Stream -> Stream` function, then `Stream.run/1` | inside each stage (a struct, or a stream accumulator) |
+| instances with paradigm ports | a pure graph value (named instances plus wires) and a runner; processes with a wired output port where the concept is concurrent | inside each instance |
+| several kinds of connection | in LiveView: HEEx nesting is the "display inside" wiring; an assign is where dataflow lands; a generic runner or effect interpreter (a Programming Paradigms layer execution model) pushes results into assigns, so the page never computes them | the program value, held as one opaque assign |
+
+Two Elixir-specific notes:
+
+- **Holding the program isn't handling the data.** Immutable data means the top-level owner (a
+  LiveView's assigns, a GenServer's state) keeps the program value and stores the updated one after
+  each run. That's Spray's `program` variable. The app never looks inside it.
+- **Don't organise by process.** A process per domain abstraction is the most literal translation of
+  Spray's objects, but Elixir guidance treats "code organization by process" as an anti-pattern.
+  Prefer pure composition values and runners, and use processes where the concept really is
+  concurrent.
+
+In the notation: the §1.6.4+ app shows no `pN` wires at all (the runner carries them), no branch, and
+no leaf state. A composition line lists instances, their literals, and how they connect.
+
+### Kinds of connection and how they run *(in development, not yet a rule)*
+
+> **Status:** this section gathers Spray's thinking on composition techniques (his chapter 4, and
+> §2.3–2.4, §3.6, §3.11) so that rules can be drawn from it later. Nothing here is scored, and the
+> Elixir notes are tentative. It replaces an earlier claim that a compliant tree is one you can
+> rewrite as a pipe, which was too narrow.
+
+**A wire's meaning is a programming paradigm.** When the app connects two instances, the connection
+has to *mean* something. Spray's list (§4.1): imperative, event-driven, dataflow, UI layout,
+activity flow, state machine transition and substate, data schema, and request/response. Each
+paradigm is an abstraction in the Programming Paradigms layer, usually a small interface that
+becomes a port type. Its **execution model** is how that meaning actually runs on the CPU, which can
+be one method or a whole engine. New paradigms get invented when they express the requirements
+better (his game-scoring example uses a "ConsistsOf" paradigm). A user story normally mixes several
+("polyglot programming paradigms", §2.4.1), all wired with the same operators.
+
+**Pipes are fine when the requirement is a line.** "It's quite possible for a user story to just
+consist of a linear sequence of instances of abstractions", such as a pipes-and-filters sequence
+(§3.6.1). A pipe is one case, not the test. Monads compose functions with one input and one output,
+"like discrete electronic components such as resistors". Domain abstractions are more like
+integrated circuits, with many pins of different kinds (§3.11.3). A monad chain can still live
+*inside* a domain abstraction, as an adapter with ALA ports.
+
+**Two kinds of communication (§4.4.1).**
+
+- *Abstraction use* runs down the layers: configuring an instance, calling a library function.
+  Calling back up is legal only indirectly, through a lambda or function that was passed in.
+- *Wired communication* runs sideways between instances, along wiring set up by the layer above. It
+  is always indirect: a sender goes only as far as its own output port, and "receivers never register
+  themselves to a sender, or to a public event". The only global event Spray allows is one so abstract
+  that nearly every abstraction uses it, such as `initialize` or `closing` (§4.7.4).
+
+**How a wire runs is decided at wiring time, not inside the abstraction.**
+
+- *Push or pull (§4.4.3).* Push is his default. It wires straight through, works for events, and can
+  run sync or async unchanged. Pull fits:
+  - lazy or expensive sources;
+  - drivers that shouldn't decide when to read;
+  - reads from a database;
+  - abstractions with many inputs that react to only one.
+- *Sync or async (§4.4.9–4.4.10).* He prefers one thread, with multithreading only for performance.
+  A one-way port should work either way, so the choice is made when wiring. "If a certain domain
+  abstraction needs to make an assumption" about when the effects of its call happen, "it is no
+  longer an abstraction."
+- *Request/response (§4.6)* is two one-way messages treated as one. Because it's wired point to
+  point, "a request is implicitly a command". That's the one place a command is fine, and only
+  because the app set up the wire.
+- *Incompatible ports* are bridged by an intermediary the app wires in, never by changing either
+  abstraction. Examples: a buffer for push into pull, a poller for pull into push, a FIFO, an averager,
+  or a load splitter (§4.4.3, §4.4.6).
+
+**Topology has its own nuances.**
+
+- *Fan-out.* UI layout supports it natively: a container's children, in order. Dataflow and events
+  use a fan-out intermediary. Where the order of fan-out matters, only the wiring layer knows, and it
+  should say so explicitly (an ordering abstraction, or activity flow) rather than rely on wiring
+  order (§4.4.4).
+- *Diamonds.* When two paths from one source meet again, the meeting point can see one new input and
+  one stale one: a "glitch". Glitches are the wiring layer's concern, because only it can see the
+  diamond. It handles them by ordering the paths, adding a trigger port, or choosing a clocked
+  execution model (§4.4.7, §4.8.3, §4.8.5).
+- *Circular wiring* is normal (feedback, undo). A loop that is entirely synchronous never returns,
+  so it needs an asynchronous hop or a delay. Events in a loop shouldn't fan out (§4.4.8, §4.7.3).
+- *A line joining many ports* is a missing abstraction, like the ground symbol on a schematic
+  (§3.6.1).
+
+**Dataflow alone has several flavours (§4.8).** It can be push or pull, *live*, clocked, a whole table
+at a time, or an iterator. Live means an input simply has its source's value at all times, as in the
+coffee maker and in FRP. Clocked means every instance latches its inputs on a tick. The data type is
+never a DTO shared between two abstractions. It comes from a lower layer or is passed in by the app,
+and ideally is inferred along the wire.
+
+**Reactive and prescriptive both have a place (§4.7.2, §4.9, §4.16).** Event-driven code reacts, and
+Spray defaults to it because it survives unforeseen events better. Activity flow prescribes an order
+through start and done ports, and can span real time without blocking. State machines are a paradigm
+of their own: states and transitions are instances, and the transition lines are wires.
+
+**Text or diagram (§3.6).** Text handles sequences and shallow trees. A graph in text needs labels,
+which are symbolic connections. Keep them in one place: follow a tree through the graph with
+indentation, and hold only the cross-connected instances in local variables (§3.6.2). When the
+requirements are an inherent graph, the diagram becomes the source.
+
+**Not every paradigm needs ports (§2.4.1).** A concept that every instance would be wired to (Spray's
+example is Style) can be an abstraction one layer down instead. He notes the cost of that: it behaves
+like a global, which hurts parallel tests and per-instance overrides.
+
+#### Elixir notes (tentative)
+
+- **Port types.** A paradigm's port is a protocol or behaviour in the Programming Paradigms layer
+  (`Step` for push dataflow; a `Stream` stage for pull). Never define one in the module that consumes
+  it.
+- **LiveView already contains two of Spray's paradigms.** HEEx nesting is UI layout, with native
+  fan-out where the order of the children is the layout order: Spray's `IUI`. An assign behaves like
+  *live* dataflow: the template always sees the current value.
+- **Sync or async is `call`, `cast`, or plain function call.** It should be chosen by whoever wires
+  the instances, not buried inside a domain module that calls a named process.
+- **PubSub topics.** A topic hardcoded in a domain or feature module is a global event name. If the
+  composition owns the topic and hands it down, it's a wire.
+- **Writing the kind of wire (a suggestion).** The notation has one kind of wire, `pN`. Where it
+  matters, a suffix can say which paradigm a wire carries, such as `p2:event`, `p3:inside` (UI
+  containment), or `p4:transition`. Spray draws different line meanings in one diagram (§1.6.6) but
+  doesn't prescribe a text mark, so this is the checklist's suggestion. The encoding linter doesn't
+  read it yet.
+- **Intermediaries are instances too.** A fan-out, a buffer, or an ordering step belongs in the
+  composition value (a `Chain`, a graph) like any other domain abstraction.
+- **State machines.** A pure transitions table (like V33's flows channel) is one candidate for the
+  state machine paradigm without `:gen_statem`.
+
+#### Candidate checks (not yet rules)
+
+- A domain abstraction that decides sync or async, or push or pull, for its caller (for example,
+  `GenServer.call` on a named process inside a domain module).
+- A domain abstraction whose correctness depends on the order its outputs are handled.
+- One value or topic joining many instances: the ground-symbol smell.
+- A subscriber that names what it subscribes to.
+- A composition that is an inherent graph but is spread across several modules' labels instead of
+  kept in one place.
 
 ## How to use it on your own code
 
@@ -707,15 +1260,17 @@ that can be rewritten as a pipe over generic stages.*
 |---|---|
 | `[X] → [X]` peer edge | lift the call into the composition; the callee's input becomes a `p` the top passes |
 | `[] → [X]` or `^f` upward edge | invert: pass the specific behavior *in* as a lambda/port parameter |
+| a receiver subscribes itself (to a sender or a named topic) | move the subscription up to the composition; pass the topic or handler down as configuration |
 | `p` shared by siblings / `*p` | the composition derives and hands each sibling exactly the value it needs |
 | literal in a leaf | hoist it to an argument at the composition line (it is requirements content) |
-| `$` on a tagged f | extract the stateful *concept* into a generic leaf — or thread the state as a wire |
+| `$` on a tagged f | extract the stateful *concept* into a generic leaf that owns it, or into a `State<T>`-style abstraction wired in from the top |
 | undeclared `q` | make it a parameter from the top, or a named contract both ends depend on downward |
 | un-nameable f | it was wiring all along: inline it as `(p) ->` |
 
-The end state is recognizable at a glance: **one tagged function per requirement cluster, at the
-top, carrying all the literals, over a shallow fringe of `[]` leaves — a tree you could rewrite
-as a pipe.**
+The end state is recognizable at a glance: **the tagged layers (the application, and features
+under it in a bigger app) carry all the literals and only wire; everything they use is a `[]`
+abstraction in a lower layer; and no edge goes sideways or up.** Then take the next step:
+make that top *describe* the connections and let a runner move the data (see "Past the pipe").
 
 ## Where even the good shape can lie (keep these in the guidance)
 
@@ -724,8 +1279,11 @@ as a pipe.**
    at scale, this is exactly a `CorePurity`-style check.)
 2. **Contract coupling is invisible to call trees.** Two `[]` leaves agreeing on a format/name/
    topic (`q`) are peers in disguise; only R5 catches it. (Mechanized: `ContractPurity`.)
-3. **Callbacks and pub/sub reintroduce upward edges** that indentation can't show — a leaf that
-   invokes a registered handler is `^f`. Write the `^`; the fix is always "the composition wires
+3. **Callbacks and pub/sub hide who set up the wire,** and indentation shows neither case. A leaf
+   invoking a handler is fine when the composition passed that handler in: it's a port. It's a
+   defect when the leaf found its partner itself, by registering with a sender, subscribing to a
+   topic it names, or looking up a process by name. Write `^f` for a lookup of something higher, and
+   treat a self-registration between peers as a peer edge. The fix is always "the composition wires
    it," never "the leaf knows whom to call."
 4. **A perfect shape can encode the wrong program.** The encoding audits *structure*
    (coupling/knowledge placement), not correctness — same caveat the requirements-coverage
@@ -736,6 +1294,7 @@ as a pipe.**
 *Origin note: this file started as a numbering sketch of the two trees; the worked forms above
 fix the f-numbering against Spray's actual §1.6 code and add the `[tag]`/`$`/`*`/`q` marks —
 without the tag column, the bad and good trees are nearly the same shape, which is what the first
-sketch ran into. The Elixir pipe form is grounded in the worked thermometer — the four domain
-abstractions under a `Thermometer` composition. The `q` rule and the mechanized-check parallels
+sketch ran into. The "Past the pipe" section follows Spray's §1.6.3–1.6.6 ladder, and its Elixir
+options come from working the same four domain abstractions under a `Thermometer` composition
+each way. The `q` rule and the mechanized-check parallels
 come from the V32 design work.*
