@@ -476,7 +476,7 @@ leaving it as background for an earlier rule.
     reads, bad). A tool can't tell them apart, so a
     shared *feature-tier* struct is a defect (above), and a shared lower-layer aggregate is a prompt
     for a human. `ala_lint` reflects this split: the feature-tier check is scored; the aggregate check
-    runs only under `--strict`/`--super-strict` (advisory under strict, scored under super-strict).
+    is reported under `--strict` and above and scored by no tier (`--enforce` scores it).
   - *Spray:* §3.6.1 (the ground symbol); §3.8 (no data coupling); §4.8.1 (no shared DTOs); §7.8.
     The identity-key technique is an Elixir and database-backed way to meet it, not Spray's wording.
 - **R11 — the application (top) layer is composition only.** The application instantiates,
@@ -555,9 +555,9 @@ him to Elixir or steps away from him, stated so a reader doesn't mistake them fo
 
 | Departure | Spray | This checklist | Why |
 |---|---|---|---|
-| Branches in a LiveView page | "no ... if statements" in the application (§3.5) | multi-clause handlers and forwarding `case`s read as routing; `connected?/1` and auth redirects tolerated (R11, the LiveView table) | the framework delivers events and a lifecycle to the page; the departures are recorded, kept small, and never used for logic |
-| Size | a fundamental constraint (Summary) | module size is an advisory check (R7; `ala_lint` scores it only under `--strict`) | line counts are a weak proxy for "readable alone", so a reader decides |
-| Graded checks | ALA's constraints aren't graded | the linter's tiers: R7 and height advisory, R11 and public surface aspirational | lets a team adopt the checklist step by step; the tier is about scoring, not about whether a finding is real |
+| Branches in a LiveView page | "no ... if statements" in the application (§3.5) | multi-clause handlers and forwarding `case`s read as routing; `connected?/1` and auth redirects tolerated (R11, the LiveView table), and `ala_lint` counts a `connected?/1` guard as routing | the framework delivers events and a lifecycle to the page; the departures are recorded, kept small, and never used for logic; both can move to an `on_mount` hook |
+| Size | a fundamental constraint (Summary) | module size is an advisory check (R7; `ala_lint` scores a module over 500 lines only under `--strict`, and reports an average under 100 lines without scoring it) | line counts are a weak proxy for "readable alone", so a reader decides |
+| Graded checks | ALA's constraints aren't graded | the linter's tiers: R7 and height advisory, R11 and public surface aspirational, the app-layer share, average size and shared aggregate reported only | lets a team adopt the checklist step by step; the tier is about scoring, not about whether a finding is real |
 | Sharing data between features | no data coupling (§3.8), no shared DTOs (§4.8.1) | R10 states the same property, applied to features: no domain struct read by two features | not a departure in substance; the identity-key technique that meets it is the Elixir and database-backed part |
 | The notation | diagrams and wiring code (§3.6) | a text encoding with `[tag]`, `$`, `q`, and tool-stamped marks | a whiteboard- and linter-friendly way to see the shapes; it isn't Spray's |
 | Holding the program value | objects change in place | an immutable program value held by its owner (a LiveView's assigns, a GenServer) and stored back after each run ("Past the pipe", R4) | Elixir has no mutation; holding the value is not handling the data |
@@ -577,8 +577,9 @@ cannot fully reach. `ala_lint` encodes this as three tiers, and the classificati
 | tier | rules and sub-checks | when scored |
 |---|---|---|
 | **Required** (a violation is a defect) | R1, R2, R3, R4, R5, R6, R9 (owned interfaces), R10, layer-validity | always (default) |
-| **Advisory** (a prompt for a reader) | R7, module-size (including an average under 100 lines), abstraction-height, pass-through, reference-level R1, self-subscription | reported by default; scored under `--strict` |
-| **Aspirational** (a purity ideal, not always obtainable) | R11 (no logic at the top), public-surface (encapsulate the little ball of mud), R10-aggregate (shared domain aggregate) | reported by default; scored only under `--super-strict` |
+| **Advisory** (a prompt for a reader) | R7, module-size (over 500 lines), abstraction-height, pass-through, reference-level R1, self-subscription (the bottom layer may own its topic) | reported by default; scored under `--strict` |
+| **Aspirational** (a purity ideal, not always obtainable) | R11 (no logic at the top; a `connected?/1` guard counts as routing), public-surface (encapsulate the little ball of mud; counted per function) | reported by default; scored only under `--super-strict` |
+| **Reported only** (a ratio or a design choice, not a defect) | the application's share of all functions, files averaging under 100 lines, R10-aggregate (shared domain aggregate) | reported at every tier; scored by no tier (`--enforce` scores one) |
 | **Not machine-scored** | R8 (judgement); the rest of R9 (outputs that name a destination or command, peer DTOs) | a human reads for these |
 
 Two placements are deliberate and follow from the "little ball of mud" reasoning under R7. **R11** is
