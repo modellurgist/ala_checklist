@@ -4,6 +4,9 @@ The language-agnostic source of truth for the **ALA Checklist** (R1–R11) and i
 **encoding notation** — a compact way to write a design down and read its
 Abstraction Layered Architecture compliance off the shape.
 
+New to ALA? [getdown.dev](https://getdown.dev) has an introduction to it, guides to applying it,
+and worked examples, including a walk through this checklist rule by rule.
+
 > An independent, unofficial restatement based on John Spray's
 > [Abstraction Layered Architecture](https://www.abstractionlayeredarchitecture.com/).
 > Not affiliated with or endorsed by the author.

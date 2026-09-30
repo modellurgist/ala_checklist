@@ -15,7 +15,8 @@ to it as "the ALA Checklist".)*
 A text notation for functions and their relationships, small enough to type on a whiteboard,
 that makes ALA violations *visible as shapes* instead of judgment calls. Worked against Spray's
 thermometer example (site §1.6: the "bad code" and the refactor toward ALA), with the
-functional-programming reading he develops later
+functional-programming reading he develops later (gathered, with its Elixir meaning, under
+"Functional programming" below)
 ([monads detour](https://www.abstractionlayeredarchitecture.com/#truebrief-detour-composing-with-monads),
 [ALA vs FP](https://www.abstractionlayeredarchitecture.com/#trueala-compared-with-functional-programming)).
 
@@ -172,6 +173,63 @@ them:
     side, reached through a port (see "Ports go sideways" below). Spray usually ends up with three
     layers above the language, one per turn of his "creativity cycle" (instantiate abstractions,
     configure them, compose them into a new abstraction, §7.2.5).
+  - **Elixir techniques that meet it.** None is required; each is one way to satisfy the rule. The
+    variant names (V10, V36 and so on) point to the Elixir variants where a technique was built. "Not
+    tried in a variant yet" means it has only been sketched, or run in the thermometer steps.
+    - *Emit an outcome instead of calling a peer.* A feature returns a description of what happened,
+      or of what should happen, rather than calling the sibling that should act on it (V10's and
+      V36's typed outcomes, V14's signals, V35's typed facts). The sideways call never exists, which
+      removes the temptation rather than policing it. What the outcome may say, and what it may not
+      name, is R9's business.
+      ```elixir
+      # Wishlist doesn't call Cart; it reports what happened.
+      def remove(%Wishlist{} = wl, id), do: {drop(wl, id), [{:wishlist_removed, id}]}
+      ```
+    - *Wire cross-feature work in one place.* V26, V28, and V36 put every join between features in
+      the composition, a `handle/3` clause whose job is wiring. Features stay ignorant of each other,
+      and the one module allowed to know both does the connecting. Spray's version: "features can
+      also have ports and be wired together" by the application (§2.2). The clause below still binds
+      `removed` and hands it on, which R11 counts as handling data; the declarative and circuit forms
+      remove that too.
+      ```elixir
+      def handle(:remove_item, %{id: id}, page) do
+        {cart, removed} = Cart.remove(page.cart, id)
+        %{page | cart: cart, recent: RecentlyViewed.record(page.recent, removed.product)}
+      end
+      ```
+    - *Make the wiring declarative.* V29's manifest and V30's committed codegen route one feature's
+      typed fact to another's reaction through generated glue. The routing lives in a data table.
+      ```elixir
+      reactions: [{Cart.Facts.ItemRemoved, RecentlyViewed.Intents, :track_removed}]
+      ```
+    - *Pass a function in where a peer used to be called.* When one function called a peer part-way
+      through, "the second function will now need to be passed into it. The function parameter is
+      also a port" (§2.3.6). It's also Spray's legitimate way to call up the layers (§4.4.1).
+      ```elixir
+      Checkout.new(charge: &Payments.charge/1)   # the composition chooses; Checkout never names Payments
+      ```
+    - *Let the composition subscribe.* The page's `mount/3` subscribes and routes messages on (V30,
+      V33–V35 and V38, through a small `Broadcast` wrapper), or a generic `on_mount` hook in the
+      Programming Paradigms layer does it, configured on the page (V39, V41).
+      ```elixir
+      def mount(_params, _session, socket) do
+        if connected?(socket), do: Phoenix.PubSub.subscribe(MyApp.PubSub, "stock")   # the page subscribes
+        {:ok, socket}
+      end
+      ```
+    - *Enforce it in CI.* V27 shipped a custom Credo check that fails the build on an upward or
+      cross-peer call. `ala_lint`'s R1 check does the same given a layer map, including domain →
+      domain calls (`mix ala.lint --layers-module MyApp.AlaLayers --min-score 90`). Neither prevents
+      the coupling, but both catch it the moment it appears.
+  - **What doesn't meet it.**
+    - A feature calling a sibling feature's function, including through a shared "service" module in
+      the same layer.
+    - A lower module that finds its collaborator itself: `Application.get_env(:app, :payments)` inside
+      a domain module, a `Registry` lookup, `send(SomeName, msg)` to a name it knows, or subscribing to
+      a topic it hardcodes.
+    - A behaviour one feature defines for another to implement (see R9).
+    - Product-knowing functions that do work and call each other (a working chain), even inside the
+      application.
   - *Spray:* Summary ("All dependencies are knowledge dependencies", "Good and bad dependencies",
     "Emerging layers"); §2.1.3; §2.2; §3.4 (and §3.4.6, knowledge dependencies reach all layers
     below); §4.4.1–4.4.2 (callbacks and registration); §7.15 (features).
@@ -182,6 +240,40 @@ them:
     discovered", like the ground symbol on a schematic. Spray's example is a game score that most
     instances interact with: make it a domain abstraction in the layer below instead of wiring
     everything to it (§3.6.1). See R10's aggregate case.
+  - **Elixir techniques that meet it.**
+    - *Give each feature a private struct.* V24's isolated capsules and V26's and V36's per-feature
+      structs leave no shared mutable thing for two peers to fight over. Immutability does the rest.
+      ```elixir
+      defmodule Wishlist do
+        defstruct products: []   # only Wishlist reads or writes this
+      end
+      ```
+    - *Keep one source of truth and derive the rest.* V13's reactive split (source fields, with
+      derived fields recomputed from them) kills the classic bug where a handler updates `items` but
+      forgets `total`.
+      ```elixir
+      def total(%Cart{items: items}), do: Enum.reduce(items, 0, &(&1.amount + &2))
+      ```
+    - *Let the composition supply cross-slot values.* V35's composed inputs: a feature that needs a
+      sibling's data doesn't read the shared session slot. The composition reads it and passes the
+      value in, and a detector flags any `session.<peer_slot>` access. By §1.6.3's standard the page
+      is still handling that value (R11). V40 goes one step further and makes it a wire: the cart
+      announces `checkout_requested` with its data, and `Checkout` takes its stock source as
+      configuration.
+      ```elixir
+      def pay(session, stock_levels), do: ...   # the composition resolved stock_levels
+      ```
+    - *Turn a value everything touches into an abstraction one layer down.* A wire joining many ports
+      is Spray's "ground symbol" smell (§3.6.1). Make it a domain abstraction the features depend on as
+      knowledge instead of wiring every feature to it. *Not tried in a variant yet.*
+  - **What doesn't meet it.**
+    - An ETS table, `Agent`, or `:persistent_term` entry that two features both read and write.
+    - A feature reading another feature's slot of a shared session, socket, or page struct
+      (`session.cart` from inside the wishlist).
+    - A process that two features both call to swap state.
+  - *Elixir note:* immutability gives this rule almost for free, so a clean R2 says less about an
+    Elixir design than it would in C# or Rust. Pure code can still couple peers through R1, R5, and
+    R10 (see "Functional programming", point 12).
   - *Spray:* Summary ("Communication between instances of peer abstractions"); §3.8 (no data
     coupling); §7.8.
 - **R3 — application literals live at the composition line.** Application literals (product-specific
@@ -191,6 +283,46 @@ them:
   are others. A literal buried in a leaf silently converts `[]` to
   `[thermo]` — the tag was lying. The contrast is an *intrinsic literal* (an identity or a physical/
   mathematical constant that is part of the abstraction's own definition), which correctly stays put.
+  - **Elixir techniques that meet it.**
+    - *Put the application's constants in one place at the top.* V34's manifest holds calibration per
+      feature (a `config:` channel the generator splices into `init/1`), V36 keeps it in a `@pricing`
+      attribute on the composition, and V38 uses a `GoodDeal.Catalog` module the composition reads.
+      ```elixir
+      defmodule GoodDeal.Catalog do
+        def shipping_rates, do: %{standard: 500, express: 1500}
+        def gift_wrap_cents, do: 299
+      end
+      ```
+    - *Make the domain take calibration as configuration.* The abstractions below take the constants
+      from the composition, so they hold no product-specific number and drop into a different product
+      unchanged. Pass it once, as R9's configuration "should" describes (for example a configuration map
+      as the first argument), not scattered through each call's data.
+      ```elixir
+      def cost(%{rates: rates}, method, subtotal), do: ...   # config first, set by the composition
+      ```
+    - *Pass rules in as predicates.* A requirement like "free shipping over $100" can be a function the
+      page passes to a generic abstraction, the way Spray writes `new Filter(x => x>=0)` (§3.11.3). The
+      rule is stated once, at the top, and a generic abstraction runs it. *Not tried in a variant yet.*
+      ```elixir
+      Shipping.new(free_when: &(&1.subtotal >= 10_000))
+      ```
+    - *Compute a derived value once, instead of threading the literal.* V38's low-stock threshold was
+      used seven times in a template as a display helper. Rather than pass the bare number through
+      all seven calls, the status is computed once from the configured threshold and flows down as
+      data, which also made the badge components pure.
+    - *Pass message text in too.* Flash and label text is an application literal. The page supplies it
+      as configuration, or maps a feature's fact to text (V39's page binds `{:cart, :removed}` to a
+      flash it words itself).
+  - **What doesn't meet it.**
+    - A number or message string in a feature or domain module (`@free_over 10_000` inside
+      `Shipping`, `"Saved to wishlist"` inside `Wishlist`). V36's features still hold flash text,
+      which is why `ala_lint` re-scored V36 lower under the revised R3.
+    - A struct default that is really a product decision (`defstruct threshold: 100`).
+    - `Application.get_env/2` read inside a domain module for a product value: the module picks its own
+      configuration (see R9, "No endpoints"). Reading config in the composition and passing it down is
+      fine.
+  - *Cost to expect:* with no defaults baked into the domain, its own tests must supply configuration
+    (V34 found this).
   - *Spray:* §1.6.3 (literals at the composition); §2.4; §3.5 and §3.5.2 (the application specifies
     the rounding, filter bandwidth, and resampling rate when it instantiates the abstractions).
 - **R4 — `$` is legitimate only inside a `[]` leaf** (state that *is* the abstraction's concept:
@@ -215,6 +347,37 @@ them:
     case by case basis." Either is fine *inside* an abstraction. What R4 forbids is the caller
     managing state that belongs to another concept. In Elixir the functional form is the default; a
     process is the object form.
+  - **Elixir techniques that meet it.**
+    - *Write a functional core over owned state.* V10's typed TEA, V36, and V38 keep feature logic as
+      pure functions over the feature's own struct. The module that owns the state is the only one
+      that reads or changes it; callers store the new struct back without looking inside. Spray's
+      reason: state that is part of a concept belongs with that concept (§3.9, §3.11.2).
+      ```elixir
+      def add(%Cart{} = cart, item), do: %{cart | items: [item | cart.items]}
+      ```
+    - *Partition state by owner.* V9's split of the page struct into `CartState`, `UIState`, and
+      `CheckoutState` makes each piece of state visibly belong to one concept.
+      ```elixir
+      defstruct cart: %CartState{}, ui: %UIState{}, checkout: %CheckoutState{}
+      ```
+    - *Let the composition value carry step state.* When the page builds a program from stages (see
+      "Past the pipe"), each stage's memory lives inside its own struct, and the runner stores the
+      updated program. The page holds one opaque value and never names a stage's state. *Run in the
+      thermometer steps, not tried in a variant.*
+    - *Give unowned state its own abstraction.* State that belongs to no concept becomes Spray's
+      `State<T>`: an abstraction with input and output ports, wired in like any other (§3.9). In
+      Elixir, a small struct in the program value, or a process, that the composition wires to its
+      readers and writers. *Not tried in a variant yet.*
+    - *Use a process where the concept is concurrent.* A sensor poller, a timer, or a bridge from
+      PubSub keeps its state in a process with a wired output port. That's Spray's object form, and
+      it's fine when the concept really runs on its own.
+  - **What doesn't meet it.**
+    - The process dictionary, or an `Agent` or ETS entry used as a hidden channel between calls.
+    - The page or a peer reading or computing another concept's raw fields
+      (`Enum.sum(page.cart.items)` in the page).
+    - A GenServer holding several concepts' state that features reach by registered name.
+    - One process per abstraction for its own sake. Elixir's guidance lists "code organization by
+      process" as an anti-pattern: processes are for concurrency, isolation, and lifecycles.
   - *Spray:* §3.9 (state joins the struct of the concept it belongs to; `State<T>`); §3.10 (the four
     reasons for objects); §3.11.2 (abstraction before referential transparency).
 - **R5 — every `qN` must be promoted or deleted.** A contract that exists only as two matching
@@ -240,6 +403,46 @@ them:
     smell when feature or domain modules use it to agree with each other. (The Elixir variants'
     `Web.Contracts` + `ContractPurity` mechanize single-sourcing names. Whether a given use is
     app-owned or a registry is the question above.)
+  - **Elixir techniques that meet it.**
+    - *Keep the meaning in the composition.* Both ends take the name or format as configuration from
+      the page, so only the page knows they agree.
+      ```elixir
+      Display.new(format: "#.#")   # the page chose the format; the formatter and display never agree on it
+      ```
+    - *Type your effects.* V10's and V36's outcome constructors turn "return `{:flash, :info, msg}`
+      and hope the other side matches" into `Outcome.flash(:info, msg)`, where a typo is a compile
+      error.
+    - *Declare names once, and keep them in the page.* V35's `Contracts` module holds every event,
+      stream, and hook name, so a rename happens in one file. V38 does the same with tiny single-source
+      modules (`CartSession` for a session key). Once features use such a module to agree with each
+      other, it becomes a registry of global names (fix 3 above). V35's features do call
+      `Contracts.stream_name/1`, which is worth a second look.
+      ```elixir
+      defmodule Web.Contracts do
+        def stream_name(:cart), do: "cart-items"
+      end
+      ```
+    - *Make both ends one abstraction.* One module owns both the encoding and the decoding. *Not tried
+      in a variant yet.*
+      ```elixir
+      defmodule StockMessage do
+        def encode(id, count), do: %{"id" => id, "n" => count}
+        def decode(%{"id" => id, "n" => n}), do: {id, n}
+      end
+      ```
+    - *Check the places signatures can't reach.* V32's `ComponentPurity` checker looks inside HEEx,
+      where a `phx-click="save"` string is a contract the compiler never sees. A companion
+      `ContractPurity` check (V33) covers the contract names themselves.
+  - **What doesn't count as a silent contract.** A `~p"/cart"` route, which the router checks at
+    compile time. Two equal strings that mean different things (V38 found `"products"` used as a
+    PubSub topic in one place and an Ecto table name in another: a coincidence, not a contract).
+    Telling these from real contracts is the reader's job; the linter only sees duplicated text.
+  - **What doesn't meet it.**
+    - A tuple shape one module produces and another pattern-matches on with no shared definition.
+    - A session key written as an atom by a plug and read as a string by the LiveViews (V38's one
+      real finding, fixed with a small module both ends depend on).
+    - The same topic or event string written as a literal in two modules.
+    - Features reading names from a shared module to agree with each other.
   - *Spray:* §3.8 (no data coupling); §4.7.4 (global event names are symbolic wirings); §7.8 (two
     instances of one abstraction); §7.25 ("no other elements should know about this one thing").
 
@@ -272,11 +475,64 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     configuration, and an example without reading the body. In Elixir the usual way is a short
     `@moduledoc` (one or two lines, plus an example when it isn't obvious), which also fits a
     sparse-comments style.
+  - **Should: a public function takes only the parameters it uses itself.** A parameter the function
+    never reads, and only carries down to another function that also just passes it on, is Spray's
+    complaint about layered functions: "The middle layer functions end up with extra parameters that
+    don't have anything to do with them, just so they can pass state data through to even lower
+    functions. This makes these intermediate functions not great abstractions in themselves"
+    (§3.11.1; for procedures, §3.9). Such a parameter is often called a *tramp* parameter. It widens
+    the function's interface with knowledge of what something further down needs, so the function
+    can't be read or reused without knowing that.
+    - *Reviewer's test:* does any public function take a parameter it never reads, only to hand it to
+      a call that passes it further down?
+    - *What doesn't count:*
+      - One hop. A function that hands its own input to the lower abstraction that processes it is
+        using that abstraction (`Thermometer.push_reading/2` gives the reading to `OffsetAndScale`).
+      - A runner or connection mechanism carrying a payload to a port. Carrying is its concept.
+      - A private helper inside one abstraction (the little ball of mud), and a framework callback
+        whose head is fixed (`handle_event/3`, `init/1`).
+      - The application layer, where the same thing is R11's "handling the data".
+    - *Why "should", not "must":* Spray gives it as a reason functions become poor abstractions, not
+      as one of his constraints, and a two-hop carry is sometimes the simplest honest shape.
+    - *Ways to fix it:*
+      - Let the composition give the lower abstraction its input or configuration directly, so the
+        middle function never sees it.
+      - Configure the lower instance at the composition and pass the *configured instance* (a
+        struct, or a function) down. The middle function then uses it, calling it with its own data,
+        which is a port (R9), rather than carrying its raw inputs.
+      - Make it a wire: V40's `Checkout` takes its stock source as configuration instead of receiving
+        stock levels through the page and passing them on.
+      - If the middle function exists only to carry, it may not be an abstraction at all (R7).
+    - *Mechanizable:* yes, as an advisory. `ala_lint`'s `tramp` check flags a public function whose
+      plain-variable parameter is never read and only passed, as a bare argument, to another project
+      module's function (a lower one, given a layer map) that doesn't read it either and passes it
+      further. It skips the exceptions above; carrying into a protocol or behaviour counts as a
+      runner delivering to a port. Across the published variants, run without layer maps, it finds
+      four, all in V30 and V35 (`Intents.pay/2` carries `stock_levels` through `Cart` to
+      `CheckStock`; `Intents.submit_address/2` carries form params through `CheckoutFlow` to
+      `Address`).
+  - **Elixir techniques that meet it.** This rule resists tooling; these habits help.
+    - *Slice by feature, and name the slice.* V4's feature slices, V23's composable units, and V36's
+      one-module-per-feature all make you name the concept before you write it.
+    - *Name domain abstractions by their kind, not their use.* `OffsetAndScale`, `Boiler`,
+      `LowPassFilter`: each names what it is, so a reader learns it once.
+    - *Ask "what do you know about?"* The answer should be one thing. A module that defines what an
+      order means *and* computes shipping on it knows two things.
+    - *Write the short moduledoc.* Two lines usually cover the concept, ports, and configuration.
+      ```elixir
+      @moduledoc "Smooths a stream of numbers. In: a number. Out: the smoothed number. Config: strength."
+      ```
+    - *Write one-off wiring as an anonymous function.* A named function used once is "indirection
+      without abstraction"; `fn` or `&` at the composition says it's wiring (§6.1, §1.6.3).
+  - **What doesn't meet it.** `Utils`, `Helpers`, or `Manager` modules; a function that renames a
+    primitive (`add(a, b), do: a + b`); names that teach nothing (`process2`, `handle_stuff`); a
+    parameter carried down unread (the "should" above).
   - *Spray:* §1.6.3 ("func1 is not an abstraction"); §2.1.1 (an abstraction must be "learnable as a
     concept"; document concept, ports, configuration, example); §7.2.5 ("a good abstraction
     separates the knowledge of different worlds"); Summary and §3.4 (a good abstraction is one where
     you "don't need to follow the indirection"); §7.23 (symbolic indirection without abstraction);
-    §7.25 ("What do you know about?").
+    §7.25 ("What do you know about?"); §3.11.1 and §3.9 (parameters carried through for lower
+    functions, the "should"); §6.1 (a one-off named function is "indirection without abstraction").
 - **R7 — every abstraction earns its existence.** A separate abstraction should be *significantly*
   more general than its caller, denote a concept worth naming, and not be premature extraction.
   Prefer few meaningful abstractions to many trivial ones. R7 is the deliberate counterweight to
@@ -317,11 +573,32 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     keep a *little* ball of mud from quietly becoming a *big* one are (a) through (c): a module that
     stops being nameable, blows the size cap, or exposes a wide public API has leaked its mud outward,
     and *that* is the defect the checklist catches, not the internal mess.
+  - **Elixir techniques that meet it.**
+    - *Carry the least machinery that works.* V36 reaches strong compliance with almost no apparatus.
+      When you find yourself adding a layer to hold a layer, that is the smell R7 names.
+    - *Let the linter catch proliferation.* `ala_lint`'s pass-through and dead-code detectors flag the
+      one-in, one-out forwarding function that adds a name and a hop but hides no decision.
+      ```elixir
+      def save(x), do: Repo.insert(x)   # 1-in/1-out, hides no decision: flagged
+      ```
+    - *Use what the standard library already names.* Don't write `Filter`, `Map`, or `Sort` domain
+      abstractions when `Enum` and `Stream` exist; Spray: "There would be no sense in reinventing that
+      functionality as 2-port classes" (§6.3). Configure a generic step with an `Enum`/`Stream`
+      function instead ("Functional programming", point 10).
+    - *Don't build wiring machinery for an algorithm.* Plain function calls down the layers are enough
+      when the problem is a calculation (§7.5; "Functional programming", point 2).
+    - *Mind both size bounds, and the port count.* 100 to 500 lines per abstraction; averaging under 100
+      means "more abstractions than we need" (Summary). "Abstractness decreases with more ports"
+      (§7.2.3), so a module with a long list of inputs is probably too specific.
+  - **What doesn't meet it.** A module that only forwards to another; a manifest or codegen step
+    for a page with two features and one reaction (V35's lesson: declare in a manifest once the wiring
+    is numerous or regular, inline in the composition while it's rare).
   - *Spray:* Summary, "All abstractions must be small" (a rule of thumb of 100 to 500 lines;
     averaging under 100 means "more abstractions than we need"); §7.10.2 ("probably in the range of
-    50 to 500"); §7.2.3 ("abstractness decreases with more ports"). Spray makes size a fundamental
-    constraint; this checklist and `ala_lint` score it as advisory (see "Where this checklist
-    departs from Spray").
+    50 to 500"); §7.2.3 ("abstractness decreases with more ports"); §6.3 (don't reinvent library
+    functions as abstractions); §7.5 (plain function composition suffices for an algorithm). Spray
+    makes size a fundamental constraint; this checklist and `ala_lint` score it as advisory (see
+    "Where this checklist departs from Spray").
 - **R8 — the composition reads as the requirements; names and shapes serve the reader.** The top
   layer should read like the spec; config keys should name what they configure; state wires should
   be shaped for a reader. **R8 is judgement, not shape** — "reads as the requirement" cannot be
@@ -329,8 +606,26 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
   the checklist: R1–R7 and R10–R11 are checkable (mechanically or semi-mechanically), R9 in part; R8 marks where automated
   checking stops and human review begins. A tool should *report* the R1–R7 findings and *flag* R8
   concerns, never claim to score R8.
+  - **Elixir techniques that meet it.**
+    - *Make the wiring a document.* V29's and V30's manifest is the page's requirements as data: which
+      features, which reactions, which configuration. V33's flows channel does the same for wizards.
+      ```elixir
+      page :cart, features: [Cart, Wishlist, Checkout], reactions: [...]
+      ```
+    - *Keep the page legible.* V36's `handle/3` clauses read top to bottom as the page's behaviour,
+      one clause per user action.
+      ```elixir
+      def handle(:remove_item, %{id: id}, page), do: Cart.remove(page, id)
+      def handle(:checkout, _args, page),        do: Checkout.start(page)
+      ```
+    - *Keep the composition inspectable.* A graph value (named instances plus a wire list) can be
+      printed, diffed, and drawn; nested closures can't (§3.11.3, §6.2.1). Keeping "create an
+      instance" apart from "wire it" lets the code follow the diagram line by line (§6.2.2).
+  - **What doesn't meet it.** Wiring spread across several modules' labels, so no one place shows it;
+    a page whose callbacks compute; configuration keys that don't name what they configure.
   - *Spray:* §2.4 (executable expression of requirements; 3–10% of the code); §3.5; §3.6 (diagrams
-    vs text); §7.7.
+    vs text); §7.7; §3.11.3, §6.2.1, §6.2.2 (explicit
+    wiring over hidden closures; keep instantiation and wiring apart).
 
 The next three rules each turn one of Spray's constraints into a check of its own, rather than
 leaving it as background for an earlier rule.
@@ -452,9 +747,91 @@ leaving it as background for an earlier rule.
     topics, or message text inside feature-layer outcomes are findable, which covers much of the
     "must" for outputs. Whether a type is "more abstract", and whether an output reads as a result,
     are judgements.
+  - **Should: configuration is set once, apart from run-time data.** Spray's §3.9: "If the abstraction
+    consisted only of a single function, then that configuration data would need to be passed in
+    every time the function is used. That would be awkward. It would also mix the data parameters of
+    the function with the configuration parameters, breaking the Interface Segregation Principle." It
+    is a "should" because his own §1.6.3 thermometer passes its settings on every call
+    (`OffsetAndScale(adc, offset=4, slope=8.3)` inside the loop), a rung he then climbs past. R3's
+    composition-line form (`f4(p1, 4, 8.3)`) is that rung.
+    - *Reviewer's test:* does any function take configuration and run-time data mixed in one
+      parameter list, so every caller repeats the same settings on every call?
+    - *Elixir techniques that meet it:*
+      - *Configuration as the first argument.* A map or struct built once at the composition comes
+        first, run-time inputs after it. The composition keeps the value (a module attribute, the
+        program value, an assign) and passes the same one on every call, or captures it once
+        (`&Shipping.cost(@shipping, &1)`).
+        ```elixir
+        @shipping %{rates: %{standard: 500, express: 1500}, free_over: 10_000}
+        Shipping.cost(@shipping, order)         # config first, then the data
+        ```
+        It is the same order as `Regex.run(regex, string)`, where the configured value comes first.
+        In a `|>` chain the piped data lands in the first argument, so capture the configuration
+        first (`&Shipping.cost(@shipping, &1)`) or make the call outside the pipe.
+      - *A struct that carries its configuration.* Built once, then used many times: Spray's §3.9
+        step, and the thermometer's `Step` structs (`%LowPassFilter{strength: 10}` then
+        `Step.push(filter, v)`). The struct can also carry state when the concept has some (R4).
+      - *A function built once.* The composition builds a closure over the configuration and passes
+        the function. It works, but a closure can't be printed or inspected (§6.2.1).
+    - *What doesn't meet it:* settings mixed into the data arguments (`cost(method, subtotal,
+      rates)`), each caller repeating them; defaults baked into the domain (R3);
+      `Application.get_env/2` read on every call inside a domain module.
+  - **Elixir techniques that meet it.**
+    - *Put port protocols in the Programming Paradigms layer.* A protocol or behaviour used as a port
+      belongs to no domain abstraction; a domain module gets a port by implementing it. *Run in the
+      thermometer steps, not tried in a variant.*
+      ```elixir
+      defimpl Step, for: LowPassFilter do
+        def push(%{strength: k, last: last} = f, v), do: (out = last + (v - last) / k; {:emit, out, %{f | last: out}})
+      end
+      ```
+    - *Let the application supply the type.* A struct the app defines and a generic module carries
+      without matching on it is fine (§4.8.1).
+    - *Collapse I/O into one paradigm value.* The coffee maker's `SensorReading` (all inputs) and
+      `HardwareCommand` (all outputs) give the application ports shaped by their kind, not by any
+      particular device, and make the boundary pure data a test can build. V25's projections do the
+      same for cross-feature reads.
+      ```elixir
+      %HardwareCommand{boiler_heater: :on, warmer_heater: :off, relief_valve: :closed}
+      ```
+    - *Adapt mismatched ports with a lambda at the wiring.* When one port's shape doesn't fit
+      another's, the composition converts with an `fn` (§6.17.4).
+    - *Make outputs announce, and keep destinations in the page.* Three techniques meet the "must",
+      with different costs:
+      1. *Announce facts; the page maps them.* The feature returns `{:item_added, item}`, and the page
+         decides that means "insert into the cart stream and flash 'Added'". It meets both halves and
+         is closest to Spray, but it costs a page clause per fact, and every feature needs its own fact
+         vocabulary. V35's typed facts plus manifest `reactions` are the closest variant.
+      2. *Results on the feature's own ports, bound once by the page.* The feature returns
+         `{:rows, {:added, item}}`, a collection change on a port it names itself. The page binds that
+         port once (`rows: {:stream, :cart}`), and a generic interpreter applies the binding. It meets
+         both halves with one line per port rather than per fact (V39's `Binder`, with thirteen kinds of
+         binding; an unbound port is silently dropped, so test that every declared port is bound).
+      3. *Pass the target in as configuration.* `Wishlist.new(stream: :wishlist)`, with the feature
+         returning `stream_insert(config.stream, item)`. It's the smallest change to a V10/V36-style
+         app, and it meets the "must". It meets the "should" only weakly, because the page can change
+         which stream, but not what kind of receiver.
+      ```elixir
+      {:item_added, item}                   # 1: a fact; the page maps it
+      {:rows, {:added, item}}               # 2: a result on the feature's own port; the page binds :rows
+      stream_insert(config.stream, item)    # 3: an operation on a target the page configured
+      Outcome.stream_insert(:cart, item)    # fails the "must": the feature names the page's stream
+      ```
+      Where the instruction is built matters. In V10 the page composition (`CartPage`) builds
+      `stream_insert(:cart_items, item)`, so the page names its own streams, which is fine. In V36 the
+      features do: `Wishlist.remove/2` returns `Outcome.stream_delete(:wishlist, product)` and the flash
+      text "Removed from wishlist". That fails the "must"; technique 3 is the cheapest fix.
+    - *Test against ports.* Pass a fake into the port (a stub struct implementing the protocol, a
+      function, or a test pid as the output). Mox is fine for a paradigm-layer behaviour, since that
+      *is* a port (see "Tests replace only ports" in the verify procedure).
+  - **What doesn't meet it.** A `@callback` a feature defines for a peer (`Checkout.PaymentGateway`);
+    `Inventory.Behaviour` written so peers can mock `Inventory`; a struct one peer defines and another
+    matches on, even if moved to a shared module; an output that names a stream, topic, or message text;
+    a module that looks up its own collaborator.
   - *Spray:* §2.3.4 (interfaces; owned interfaces "critically important"); §2.3.6; §4.4.2; §4.6
     (request/response); §4.8.1 (no DTOs; T passed in by the application); §6.5.5 (dependency
-    inversion); §7.2.6 (outputs announce); §7.8; §7.24.
+    inversion); §7.2.6 (outputs announce); §7.8; §7.24; §3.9 (configure once; the "should");
+    §6.17.4 (a lambda at the wiring as an adapter).
 - **R10 — no shared entity: no two features know the meaning of the same data.** Spray's rule is
   "no data coupling": two modules shouldn't have to agree on what a piece of data means (§3.8,
   §7.8).
@@ -477,6 +854,23 @@ leaving it as background for an earlier rule.
     shared *feature-tier* struct is a defect (above), and a shared lower-layer aggregate is a prompt
     for a human. `ala_lint` reflects this split: the feature-tier check is scored; the aggregate check
     is reported under `--strict` and above and scored by no tier (`--enforce` scores it).
+  - **Elixir techniques, in more detail.**
+    - *Give features private structs and share only a key.* V24's isolated capsules, V26's dual
+      capsules, and V36's per-feature structs mean two features never hold the same data struct. They
+      share an identity (a product id) and keep their own data.
+      ```elixir
+      %Wishlist{product_ids: [id]}         # share the id...
+      %Cart{items: [%{product_id: id}]}    # ...not each other's struct
+      ```
+    - *Mediate cross-feature reads through a projection or the composition.* V25 hands feature A a
+      projection of B, not B's struct, and V35 has the composition resolve the value and pass it in.
+      ```elixir
+      def projection(%Inventory{count: n}), do: %{in_stock?: n > 0}
+      ```
+    - *Make both ends one abstraction.* See R5's codec sketch. *Not tried in a variant yet.*
+  - **What doesn't meet it.** `Checkout` pattern-matching on `%Cart{}`; one `Order` struct every
+    feature reads and writes (Clean Architecture's shared entity), unless it is deliberately a
+    lower-layer domain abstraction (the aggregate case above, a judgement).
   - *Spray:* §3.6.1 (the ground symbol); §3.8 (no data coupling); §4.8.1 (no shared DTOs); §7.8.
     The identity-key technique is an Elixir and database-backed way to meet it, not Spray's wording.
 - **R11 — the application (top) layer is composition only.** The application instantiates,
@@ -532,7 +926,63 @@ leaving it as background for an earlier rule.
     `on_mount` hook takes out of the page) has one of the moves above, and a page can reach zero
     logic this way. "The application layer, and where LiveView pieces sit" has a table of the forms a
     page typically contains, and says which are wiring, which are logic to move down, and which are
-    framework-imposed departures to keep small.
+    framework-imposed departures to keep small. "How close a LiveView page can get" records what the
+    variants reached and what it cost.
+  - **Elixir techniques that meet it.**
+    - *Split the shell: generic interpreter below, page dispatch in the page.* V36's shell reduces a
+      list of outcomes into view state. That interpreter is generic, so it's an execution model in the
+      Programming Paradigms layer, below the page. The part that names the page's composition is page
+      code. (V35's `EffectInterpreter` is the same idea.)
+      ```elixir
+      # paradigm layer, shared by every page:
+      def apply_all(socket, outcomes), do: Enum.reduce(outcomes, socket, &apply_outcome/2)
+      ```
+    - *Guards go into the connection mechanism.* `with`, a runner that stops when a stage returns
+      `:quiet`, or `Stream` filtering (§6.1.3). *The `:quiet` runner is run in the thermometer steps,
+      not tried in a variant.*
+      ```elixir
+      with {:ok, order} <- Checkout.submit(page.checkout),
+           {:ok, receipt} <- Payments.charge(order), do: ...
+      ```
+    - *Requirement conditions become configured instances; history becomes a state machine.* A rule
+      becomes a predicate passed to a generic abstraction (R3), or a small logic abstraction like the
+      coffee maker's AND gate (§2.9.3). A rule that depends on what happened before becomes a state
+      machine (§4.16). V33's flows channel, a pure transitions table, is the closest variant, and V39–V41
+      pass the table in as configuration so the feature decides.
+    - *Keep an abstraction's own rules inside it.* The coffee maker's `Boiler` enforces "the heater is
+      off whenever I am empty or my valve is open" itself. The application asks it to heat; it refuses
+      when that would be unsafe. The rule never reaches the top.
+    - *Route outcomes; don't decide on them.* A `case` whose arms only send the ok and error results to
+      different places is routing two output ports (§4.9.1). A `case` that computes in its arms is
+      logic, and belongs in a feature. V39 routes a `handle_async` result to `Checkout.succeeded/2` and
+      `Checkout.failed/2` with three clause heads.
+    - *Move iteration and compound conditions out of the page template.* A generic list or table
+      component iterates (§4.12). A feature computes a compound boolean and the template wires it.
+      ```heex
+      <.table rows={@streams.items} />   <%!-- the component iterates, not the page --%>
+      ```
+    - *Move lifecycle guards out of `mount/3`.* An `on_mount` hook is LiveView's own extension point.
+      V39 and V41 configure a generic hook on the page, `on_mount {Subscribed, {Broadcast, :subscribe}}`,
+      so their `mount/3` has no branch. Auth redirects fit the same hook; untried here.
+    - *Generate the glue.* V30's committed codegen makes the page's wiring a generated file, so the
+      hand-written page stays thin (§2.5.1). `mix zc.gen --check` fails the build if it drifts.
+    - *Stop handling data at the page.* Three designs reach zero R11 findings, each by a different
+      route: bind every feature output once in one map per page (V39's `Binder`), run the page as a
+      circuit of instances and wires (V40), or make each feature a LiveComponent instance that lands
+      its own outputs and announces the rest (V41). Their costs are under "How close a LiveView page
+      can get".
+  - **What doesn't meet it.**
+    - Arithmetic and computed assigns in the page (`assign(socket, :total, Enum.sum(...))`).
+    - A business rule in a handler ("can't check out an empty cart" as an `if`).
+    - A `case` on the URL in `handle_params` that encodes which steps may follow which.
+    - A handler that takes one feature's result and passes it to another.
+    - Loading rows in `mount/3` and handing them to a feature (`Cart.new(items: Store.all(...))`).
+    - A `for` or a compound `:if` in the page's template, including a comparison like
+      `disabled={@item_count == 0}`.
+  - **Limits.** Some forms stay in any LiveView page because the framework or the language puts them
+    there: routing by event name and URL, decoding browser params, storing the program value back, a
+    lookup from URL to step, and a JavaScript hook or two. None is logic. "How close a LiveView page
+    can get" lists them with reasons, and records what the three zero-finding designs cost.
   - *Spray:* §2.9.3 (the coffee maker's application is a diagram of instances; its conditions are
     AND-gate instances, not `if`s); §3.5 ("no normal programming language code such as assignments
     and if statements"); §1.6.3 (the thermometer's `if` flagged as logic); §1.6.4 and §6.1.3 (guards
@@ -552,6 +1002,191 @@ One topic is *in development* and not yet a rule: how wires differ in meaning an
 (paradigms, push or pull, sync or async, fan-out, glitches, loops). See "Kinds of connection and
 how they run" under the worked examples.
 
+## Functional programming: what Spray says, and what it means in Elixir
+
+Spray writes in C#, but he returns to functional programming many times, and it matters more for
+Elixir than any other part of his site. His own chapters on it (§6.25 "Functional programming",
+§6.26 "Functional programming with monads", §6.27 "Functional Reactive Programming") say only "TBD".
+What he does say is spread across §2.3.6, §3.9, §3.10.2, §3.11, §6.1 to §6.3, §7.2 and §7.5. This
+section gathers it, says what each point means in Elixir, and names the rule it supports. Where the
+Elixir reading is this checklist's and not Spray's, it says so.
+
+1. **The application layer is pure functional code.** "ALA is, essentially, functional programming.
+   All the top layer code that implements the application itself by wiring up instances of domain
+   abstractions in some combination is pure functional code" (§3.11). The impure work lives below it:
+   "The fundamental idea of monads, that of separating execution details, state, and I/O into
+   pretested units that are then composed using pure functional code is the same for ALA" (§3.11.1).
+   "Domain abstractions completely hide their contained state in well tested code and are composed by
+   pure functional code" (§3.10.2).
+   - *In Elixir:* the composition (a page, a wiring function) builds values and routes them. It
+     doesn't call the repo, send messages, or compute. Two placements of the side effects both meet
+     this. Spray's is to hide them *inside* domain abstractions (his `Display` writes to the screen
+     itself, his `CSVFileReaderWriter` reads the file). The common Elixir one (functional core,
+     imperative shell) has features return effects as data and a generic interpreter in the
+     Programming Paradigms layer perform them (V35's `EffectInterpreter`, V36's shell, V39's
+     `Binder`). Either keeps the top layer pure. The interpreter form keeps the features pure too,
+     which makes them testable without Phoenix. *Rules:* R11, R4.
+2. **Plain functions can be ALA.** "ALA can be applied to functional programming too. Abstractions are
+   then obviously functions, and the same ALA relationship restriction applies - a function may only
+   call a significantly more abstract function. The functions then form layers" (§2.3.6). "Parameters
+   and return values are effectively port", and when a function used to call a peer part-way through,
+   "the second function will now need to be passed into it. The function parameter is also a port"
+   (§2.3.6). And the wiring pattern isn't always needed: "if your whole problem is just an algorithm,
+   and therefore suits a functional programming style, then you can still compose abstractions with
+   function abstractions, provided all function calls are knowledge dependencies, and not say, just
+   passing data or events" (§7.5).
+   - *In Elixir:* a pricing calculation that calls `Money`, `Decimal` and a tax-rate function is
+     fine as plain calls down the layers. It needs no ports, runner, or circuit. Ports and wiring are
+     for where instances *communicate* (one feature's result feeding another, events, UI). Don't
+     build a circuit for arithmetic. *Rules:* R1, R7, R9.
+3. **Two ways plain functions go wrong** (§3.11.1). "Functions expose their inputs and outputs to the
+   layer above, but the layer above is not interested in the data itself, only in the abstract
+   concept of what the function does." And "functions, or sets of functions, that naturally associate
+   strongly with some state must have their state passed into and back out of them every time they
+   are used." Across several layers it gets worse: "The middle layer functions end up with extra
+   parameters that don't have anything to do with them, just so they can pass state data through to
+   even lower functions. This makes these intermediate functions not great abstractions in
+   themselves." §3.9 says the same of procedures: "Some procedures will need extra parameters even
+   though they don't need the data, because they need to pass it through to other procedures that
+   they call."
+   - *In Elixir:* the first problem at the top is R11's "handling the data" (§1.6.3). The second is
+     R4's reason for keeping state with its owner. The third, a parameter carried through a function
+     that never reads it, is R6's tramp-parameter "should". Elixir invites it, because threading an
+     `opts`, a `context`, or a `session` map down several calls is the easy default.
+4. **Abstraction before referential transparency** (§3.11.2, Summary). "ALA prioritizes abstraction
+   over referential transparency." Referential transparency "attempts to improve analysability by
+   always removing time from the analysis, even when time is a fundamental aspect of what is being
+   described. It will expose implementation details if necessary to do it." His example: "Passing the
+   running average to the function every time there is new input data breaks an otherwise good
+   abstraction." A computation is `input + state --> state + output`, which you can group two ways,
+   the functional `(input + state) --> (state + output)` or the object form `input ( + state -->
+   state +) output`, and "In ALA we choose between these two philosophies on a case by case basis."
+   - *In Elixir:* immutability forces the functional grouping, so a filter's memory comes back as a
+     new struct. What keeps the abstraction whole is that the caller stores the struct *without
+     looking inside it*: the state is still the filter's. A runner or a program value held in assigns
+     removes even the storing ("Past the pipe"). A process is the object form. Use it where the
+     concept is concurrent, not to imitate objects. *Rule:* R4.
+5. **From procedural code to ALA, without object-oriented design** (§3.9, §3.10). Spray derives objects
+   from procedures in five steps, and in §3.10 calls ALA's use of them "objects as a language feature,
+   not a design philosophy". Configuration goes in a struct, and that struct "is immutable". Configuring once
+   matters: "If the abstraction consisted only of a single function, then that configuration data
+   would need to be passed in every time the function is used. That would be awkward. It would also
+   mix the data parameters of the function with the configuration parameters, breaking the Interface
+   Segregation Principle." Wiring is two more fields, and "The fields are immutable after they are
+   set." State that belongs to one abstraction joins its struct. State that belongs to none becomes a
+   state abstraction with dataflow ports, wired in. The result: "both the configuration data, and the
+   wiring data stored in an instance can be immutable. Only instances of abstractions that contain
+   state data are mutable, and this is clear from very nature of the abstraction."
+   - *In Elixir:* a struct holding configuration (and state, when the concept has any) is Spray's
+     instance. Configuration set once, apart from run-time data, is R9's "should". One way is a
+     configuration map or struct as the *first argument*, with run-time inputs after it. *Rules:* R9,
+     R4.
+6. **Monads are the nearest functional analogue, and a two-layer pattern.** Spray's thermometer detour
+   (§1.6.4) builds the program as a monad chain and then runs it: "Monads have allowed us to separate
+   execution flow from composition flow." His summary of the monad pattern (§6.1.16): "monads are a
+   2-layer pattern. The two layers correspond roughly with ALA's application and programming
+   paradigms layers. The code that uses Bind to compose functions, and the lambda functions
+   themselves are in the application layer. The Bind function and the Interface<T> are in the
+   programming paradigms layer." Library functions such as Sort and Filter "would go in the
+   equivalent of the domain abstractions layer". Bind is also where the checks between calls go: in
+   imperative code "we might typically need some extra code after every function call", and "we can
+   put that extra code inside the Compose function instead. This refactoring is essentially what the
+   monad pattern is" (§6.1.2).
+   - *In Elixir:* `with` is a Bind for `{:ok, _}`/`{:error, _}`. A `Stream` pipeline is a deferred
+     monad. A protocol such as `push(step, data) :: {:emit, out, step} | {:quiet, step}` plus a runner
+     is a push-style Maybe bind: a step with nothing to say returns `:quiet`, and the runner, not the
+     application, stops. The runner and protocol belong in the Programming Paradigms layer. *Rule:*
+     R11 (guards move into the connection mechanism).
+7. **Where monads fall short** (§3.11.3, §6.2). "ALA and monads are both about composition... The
+   difference between ALA and monads is that ALA composes objects whereas monads compose functions."
+   Monad functions "just have two 'ports', an input and an output"; "ALA's domain abstractions, on the
+   other hand, can have many ports", and those ports "can use different programming paradigms, not
+   just a specific data flow". "Monad libraries are more like discrete electronic components such as
+   resistors and capacitors"; domain abstractions are like integrated circuits. "Composing functions
+   creates mostly a chain structure whereas composing objects with ports creates an arbitrary network
+   structure" (§6.2).
+   - *In Elixir:* a `|>` or `Stream` chain suits a requirement that is a line. When one output feeds
+     two places, or UI, events, and dataflow meet, the composition is a graph: a value holding named
+     instances and a wire list, run by a runner, or HEEx for the UI part. See "Kinds of connection".
+     *Rules:* R8, R11.
+8. **Built once, run forever, and push by default** (§3.11.3, §3.11.4). "In ALA, things are static (or
+   declarative) on a larger scale than just a single line of monad code. In fact the entire
+   application is wired up once at the beginning when the application starts executing, and then all
+   ports are considered infinite steams that work as long as the application is running. To get a
+   finite sequence, you design a port that is an infinite stream of finite sequences." He criticises
+   Rx for the opposite: once `OnCompleted` fires, "the object structure wont run ever again. It has to
+   be reconstructed". On push: "The reason to prefer push is that push can be either synchronous or
+   asynchronous, whereas pull can only be synchronous (unless you use future objects.)" So "the choice
+   of synchronous or asynchronous is deferred until the application user stories are" written
+   (§6.2).
+   - *In Elixir:* a `Stream` is pull-driven and is consumed by one run, so it suits a batch you
+     iterate, not a LiveView that receives one reading at a time. The run-forever form is a
+     composition value built once (in `mount/3`, or `init/1`), held by its owner, and fed each input
+     as it arrives. A push protocol keeps the sync-or-async choice open: the same `Step` structs run
+     synchronously in a pure `Chain` and asynchronously inside one process per instance, unchanged.
+     *Rules:* "Past the pipe", "Kinds of connection".
+9. **Explicit structures, not hidden closures** (§3.11.3, §6.1.1, §6.2.2). "Monad library code usually
+   builds large object structures full of delegate objects, closure objects and other objects 'under
+   the covers'. This 'under the covers' structure makes monads difficult to understand, trace and
+   debug. ALA also creates object structures, but it's done explicitly with wiring code." He keeps
+   creating an instance separate from wiring it (`WireIn(new Filter(...))`, not `.Filter(...)`)
+   because domain abstractions are written often, because the application can choose chaining or
+   fan-out, because it can name which port, and because "Explicit WireIn and WireTo operators allow us
+   to directly translate a diagram to code" (§6.2.2). Fluent helpers that do both are fine "for very
+   common cases" (§3.11.3).
+   - *In Elixir:* a composition held as data (structs plus a wire list) can be printed, checked for
+     unwired ports, diffed, and drawn. A composition held as nested anonymous functions or a `Stream`
+     can't be inspected. Committed generated code beats a macro for the same reason (V35): the wiring
+     is a file you can read. `Circuit.new(...) |> Circuit.wire(:a, :b)` keeps the two steps apart; a
+     piped DSL that creates and connects in one call is the fluent form, fine for a line. *Rules:*
+     R8, "Past the pipe".
+10. **Use a monad library you already have** (§6.3, Summary). "There would be no sense in reinventing
+    that functionality as 2-port classes." He gives two ways: give some ports the library's own
+    chaining type and put the library's operators between two instances (§6.3.1), or "write a general
+    purpose domain abstraction that can be configured with a monad expression" (§6.3.2), which the
+    Summary calls a domain abstraction called *query*.
+    - *In Elixir:* don't write `Filter`, `Map`, or `Sort` domain abstractions when `Enum` and
+      `Stream` exist. Either type a port as an `Enumerable` and put `Stream` functions between two
+      instances, or write one generic `Transform` step configured with a function the composition
+      supplies (`%Transform{fun: &Stream.filter(&1, fn r -> r.qty > 0 end)}`). *Not tried in a
+      variant yet.* *Rules:* R7, R9.
+11. **Lambdas: anonymous for one-offs, passed in for configuration and for calling up.** A function
+    used once "is not an abstraction. The name itself becomes just a symbolic connection between two
+    points in the code... It's indirection without abstraction. ... Lambda expressions solve this
+    problem because they are anonymous" (§6.1; the `func1` point, §1.6.3). Lambdas also configure
+    generic abstractions (`new Filter(x => x>=0)`, §3.11.3; the bowling `Frame` completion lambdas,
+    §4.20). They are one of the legal ways to call up the layers (§2.1.3, §4.4.1). And they adapt
+    mismatched ports: "This can be as simple as a lambda expression passed to the WireTo operator, in
+    the same way that you would pass a lambda expression to a .Select clause in LINQ" (§6.17.4).
+    - *In Elixir:* `fn` and `&` captures, written at the composition. *Rules:* R6, R9, R11.
+12. **"No side effects" is not the goal** (§7.2). "Another contender to be king is 'no side effects'
+    used by the functional mathematical purity guys... this lord is only effective because he usually
+    serves the abstraction king. But, again, there are times when he doesn't, and 'no side effects' is
+    not enough to make a good abstraction."
+    - *In Elixir:* immutability rules out shared mutable state (R2) almost for free, and that inflates
+      how clean an Elixir codebase looks. Pure code can still be fully coupled: a pure function that
+      calls a peer (R1), reads a sibling's struct (R10), or matches a tuple shape another module
+      produces (R5). Judge the design by the rules, not by purity.
+13. **Immutability doesn't settle concurrency** (§3.10.2). "In functional programming, the issues of
+    multithreading are handled by using immutable data. I suspect that systems that only use immutable
+    state also have problems when using multiple threads. For example one thread could be using and
+    inconsistent or outdated copy of the current actual state." His own rule is one thread per
+    stateful instance, and for asynchronous calls, chaining with a task or future's Bind ("effectively
+    the monad pattern for asynchronous calling"), or failing that, writing the abstraction as a state
+    machine.
+    - *In Elixir (this checklist's reading):* every LiveView process holds its own copy of shared data,
+      such as stock levels. Decide at wiring time which instance is authoritative (a process or the
+      database), treat each page's copy as a cache, and wire updates to it (PubSub set up by the
+      page). Async work goes to `Task` or `start_async/3`, and a long-running activity becomes a state
+      machine, not a blocked process.
+14. **Recursion needs a forward-declared abstraction** (§8.1). "Circular knowledge dependencies happen
+    all the time in functional programming where recursion replaces iteration." Recursion inside one
+    abstraction is its own business. Across abstractions, put the abstract concept one layer down as
+    an interface (a protocol in Elixir) that the concrete parts both provide and accept. A chain of
+    calls that loops back is usually run-time communication and should be wired instead.
+    - *In Elixir:* `Chain` implementing `Step`, so a chain can be a step inside a bigger chain, is this
+      pattern. So is a tree of components that render children through a shared slot or protocol.
+
 ## Where this checklist departs from Spray
 
 The rules follow Spray, and each one cites where. These are the places where this checklist adapts
@@ -564,6 +1199,7 @@ him to Elixir or steps away from him, stated so a reader doesn't mistake them fo
 | Graded checks | ALA's constraints aren't graded | the linter's tiers: R7 and height advisory, R11 and public surface aspirational, the app-layer share, average size and shared aggregate reported only | lets a team adopt the checklist step by step; the tier is about scoring, not about whether a finding is real |
 | Sharing data between features | no data coupling (§3.8), no shared DTOs (§4.8.1) | R10 states the same property, applied to features: no domain struct read by two features | not a departure in substance; the identity-key technique that meets it is the Elixir and database-backed part |
 | The notation | diagrams and wiring code (§3.6) | a text encoding with `[tag]`, `$`, `q`, and tool-stamped marks | a whiteboard- and linter-friendly way to see the shapes; it isn't Spray's |
+| Framework residue in a LiveView page | the application is wiring and configuration only (§3.5) | param decoding, a URL-to-step lookup, a JavaScript hook or two, and component instances kept mounted but hidden are recorded as departures ("How close a LiveView page can get") | the browser sends strings, the framework hands the page the URL, some things only the client can do, and `send_update` to an unmounted component raises |
 | Holding the program value | objects change in place | an immutable program value held by its owner (a LiveView's assigns, a GenServer) and stored back after each run ("Past the pipe", R4) | Elixir has no mutation; holding the value is not handling the data |
 | Execution model | prefers single-threaded solutions (§4.4.9) and treats the execution model as a wiring-time choice | the same property: execution-model choices are made where the instances are wired, and state belongs to its concept (R4, "Kinds of connection"). Whether to use processes is a technique, compared in the field guide | not a departure in substance; listed because Elixir makes processes tempting |
 | Comments | "critically important" abstraction comments (§2.1.1) | a short `@moduledoc` naming concept, ports, configuration, and an example when needed (R6) | covers what Spray asks for without narrating bodies |
@@ -581,7 +1217,7 @@ cannot fully reach. `ala_lint` encodes this as three tiers, and the classificati
 | tier | rules and sub-checks | when scored |
 |---|---|---|
 | **Required** (a violation is a defect) | R1, R2, R3, R4, R5, R6, R9 (owned interfaces), R10, layer-validity | always (default) |
-| **Advisory** (a prompt for a reader) | R7, module-size (over 500 lines), abstraction-height, pass-through, reference-level R1, self-subscription (the bottom layer may own its topic) | reported by default; scored under `--strict` |
+| **Advisory** (a prompt for a reader) | R7, module-size (over 500 lines), abstraction-height, pass-through, tramp parameters (R6's "should"), reference-level R1, self-subscription (the bottom layer may own its topic) | reported by default; scored under `--strict` |
 | **Aspirational** (a purity ideal, not always obtainable) | R11 (no logic at the top; a `connected?/1` guard counts as routing), public-surface (encapsulate the little ball of mud; counted per function) | reported by default; scored only under `--super-strict` |
 | **Reported only** (a ratio or a design choice, not a defect) | the application's share of all functions, files averaging under 100 lines, R10-aggregate (shared domain aggregate) | reported at every tier; scored by no tier (`--enforce` scores one) |
 | **Not machine-scored** | R8 (judgement); the rest of R9 (outputs that name a destination or command, peer DTOs) | a human reads for these |
@@ -979,6 +1615,136 @@ normal *inside* it.
   running the checklist must **read the templates** — this is the single biggest thing the linter
   cannot see and the human necessarily can.
 
+### How close a LiveView page can get
+
+The table of page forms above sorts them. This part records what the variants found when they tried to
+remove them: which departures the framework really forces, which only look forced, and what the
+designs that reach zero cost. It is the checklist's Elixir reading throughout.
+
+**What LiveView hands the page.** `mount/3`, twice (once for the static render, once when the
+websocket connects); `handle_event/3` for every browser event, named by a string with string
+params; `handle_params/3` whenever the URL changes, including browser back; `handle_info/2` for every
+message to the process; `handle_async/3` when a `start_async` job finishes; and `render/1`. The
+page's state is its socket's assigns, which are immutable, and LiveView tracks changes per assign
+key. Some of this is Spray's model under another name. Assigns are where the dataflow lands (his
+`temperature` connection, §1.6.6). The template's nesting is the "display inside" wiring. One
+process per page is the single-threaded execution he prefers anyway (§4.4.9). Other parts are
+foreign: string-named events, a URL that can change under the page, and two mounts.
+
+**Forced by LiveView or Elixir, and valid.** Keep these small and never use them for logic.
+- *Event routing clauses.* The framework calls `handle_event("remove_item", params, socket)`, so
+  something has to match on the string. One clause per event, each only forwarding, is one wire
+  from an event to an input: pattern matching doing the job of Spray's port names. V41 shows the
+  routing can move into feature components (`phx-target={@myself}`), but some module still matches
+  the string.
+- *Decoding params.* `String.to_integer(id)` adapts the browser's format, a technical domain reached
+  sideways (§7.17). If it repeats everywhere, a generic param caster configured per event takes it
+  out.
+- *Holding the program value.* Elixir's instances don't change in place, so the page stores each
+  feature's new state back after every step. That's Elixir's departure, not LiveView's, and it isn't
+  "handling the data" while the page never looks inside what it stores (R4).
+- *HEEx instead of wiring code for the UI.* HEEx is a better notation for the same "display inside"
+  wiring Spray writes with `WireTo` nesting. Moving the UI tree into a wiring table would be
+  reinventing a worse HEEx.
+- *Assigns shaped for change tracking.* A page does better with `@summary` and `@saved_count` as
+  separate assigns than one struct holding both. Those are named landing points, Spray's symbolic
+  connections kept inside one abstraction; R5 accepts them while no feature needs the names.
+- *URL steps belong to the page.* `handle_params/3` delivers the URL, and LiveView raises if a
+  component calls `push_patch` inside `update/2`. So the page owns the table from flow step to path
+  (V41's checkout panel announces `{:checkout, :step, step}` and the page patches). That agrees
+  with R3: paths are application literals.
+- *A few lines of client JavaScript.* Focusing a field on mount can't be done from the server. Most
+  variants from V28 on ship an `AutoFocus` hook in its own file, attached from the template.
+
+**Forced by LiveView, but it moves out of the page.**
+- *`if connected?(socket)` in `mount/3`.* A generic `on_mount` hook in the Programming Paradigms
+  layer, configured on the page, holds the guard once, below the page (V39, V41):
+  `on_mount {ZeroCoupledWeb.Paradigms.Subscribed, {ZeroCoupled.Foundation.Broadcast, :subscribe}}`.
+  That's Spray's first move: the guard goes into the connection mechanism.
+- *Auth redirects.* Same shape, same fix: `on_mount` is where Phoenix already puts auth. Untried
+  here, since no variant has auth.
+- *`handle_async/3` results.* A payment job returns `{:ok, {:ok, url}}`, `{:ok, {:error, reason}}` or
+  `{:exit, reason}`. V39 routes them to `Checkout.succeeded/2` and `Checkout.failed/2` with three
+  clause heads, Spray's two output ports (§4.9.1). V40's `ToAsync` sink and V41's checkout panel own
+  the job and its outcome, so the page doesn't see it.
+
+**Not forced: habits the variants removed.** Arithmetic and computed assigns (the zero-coupled
+variants from V28 on compute totals in a feature). Business rules in handlers (V39's
+`Checkout.start/2` returns `blocked: :empty`, which the page binds to a flash). History in
+`handle_params` (V33's transitions table; V39–V41 pass it in as configuration). Handing values from
+one feature to another (V35 passes them in; V40 makes it a wire). Loading rows in `mount/3` (V40
+wires a store source into the feature's `:load` input; V41's component loads itself). `for` loops
+and compound conditions in the template (a generic list component; a feature computes the boolean).
+
+**What remains in a page that reaches zero.**
+1. routing by event name and URL, which Elixir does with pattern matching instead of port names;
+2. decoding browser params, a technical-domain adapter at the edge;
+3. storing the program value back, because Elixir is immutable;
+4. a lookup table from URL to step (`Map.get(@steps_by_url, params["step"], :address)`), because the
+   framework hands the page the URL;
+5. a JavaScript hook or two for things only the client can do.
+
+None of these is logic, and none has a Spray move that removes it without replacing it with
+something equivalent. Two smaller residues from V41: a template comparison
+(`disabled={@item_count == 0}`, which should be a boolean the cart announces; the linter doesn't
+read templates, so only a reader finds it), and hidden subtrees (`send_update` to an unmounted
+component raises, so the cart's instances stay mounted and hidden behind the checkout screen).
+
+**R11 findings by variant** (`ala_lint --super-strict`, which doesn't count routing clauses, `with`,
+ok/error routing, or the `connected?` guard):
+
+| Variant | R11 findings | What's left in the top layer |
+|---|---:|---|
+| thermometer §1.6.3 | 3 | two nil guards and handled data, the things Spray flags in his own §1.6.3 |
+| thermometer §1.6.4 onward, including §1.6.6 in LiveView | 0 | a runner moves the data; the page holds one program value |
+| coffee maker | 4 | its user stories still branch in the composition |
+| V36 | 3 | a plain composition that branches in a few places |
+| V38 | 8 | branching `handle_event` clauses and handled data, kept on purpose (its charter was to evolve a conventional app without adding indirection) |
+| V35 | 4 | URL and sequencing branches from V33's flows |
+| V39, V40, V41 | 0 | routing clauses, param decoding, a URL lookup, and `with` |
+
+**What reaching zero costs.** Each design is something a team has to learn and keep, which is why
+R11 stays in the linter's strictest tier.
+- *V39, bound ports:* a binder with thirteen kinds of binding and one map per page. An unbound port
+  is silently dropped, so it wants a test that every port a feature declares is bound. Familiarity
+  4 of 5.
+- *V40, circuit instances:* Spray's diagram run as data. A click takes two message hops (component to
+  page to circuit to component), and the cart's circuit has 38 instances and 41 wires. Familiarity 2.
+- *V41, feature components:* the shape `phx.gen.live` already gives you, so nothing new to learn.
+  Cross-feature effects take two message hops, and the design lives in about twenty `handle_info`
+  clauses instead of one table. Familiarity 5.
+
+The linter scores all three within a point of each other (97 under `--strict`). What separates them
+is what it can't see: readability, hops, and vocabulary.
+
+**One placement held loosely.** V41's feature panels are LiveComponents placed in the Features layer:
+the page configures and wires each one, and none names the page. But their markup is shaped for this
+page's layout, and a reviewer could fairly call that part application. If that reading wins, split
+each panel into a feature instance that handles events and outputs, and page-owned markup passed in
+through slots. Untried.
+
+**Does stopping short pay?** Mostly, yes. Spray's own history says so: "The turning point was when I
+noticed two (accidental) successes in parts of two projects" (§1.5.1). Those parts had "undergone
+considerable maintenance", and "their simplicity had never degraded", like "two pieces of metal that
+had never rusted" at a rubbish dump, inside projects that weren't ALA. His state-machine diagram that
+replaced 5000 lines of C "was easy to maintain for years to come" (§4.16), and his advice for legacy
+code is "Conversion of user stories takes place iteratively" (§8.3). Most benefits are local to one
+abstraction's boundary: an abstraction whose own dependencies all drop can be read and changed
+alone, whatever its neighbours do. A hoisted literal, a feature that stops reading a sibling's
+state, or a guard moved into a runner each pays on its own (V38 got real value this way). Some
+benefits need the whole page, though:
+- *The page reads as the requirements* (R8) only when all of it is wiring. One handler that computes,
+  and a reader has to check every handler.
+- *The diagram is the source* only when all the wiring is in it (V35's drift check, V39's bindings
+  map).
+- *"No abstraction knows a peer"* is a guarantee only with no exceptions. One peer call and you're
+  back to reading callers.
+- *An abstraction's own isolation* is all-or-nothing at its boundary.
+
+A page with a few forwarding clauses and a URL lookup loses nothing, because those forms aren't
+logic. A page that keeps some real logic still gets the local benefits of every abstraction below
+it. What it gives up are the whole-page properties above.
+
 ### Running the checklist by hand to compare with the linter
 
 The linter's method is a mechanical shadow of the manual checklist, so a reviewer can reproduce and
@@ -1032,7 +1798,11 @@ decidable. Read each note as "what a human must still judge."
   primitive. *Human must judge:* the actual rule — "does this name a **learnable concept**?" A
   meaningful predicate (`empty?`) trips the primitive-wrapper heuristic (false positive); a
   meaningless-but-plausible name (`process2`, `handle_stuff`) passes it (false negative). Naming
-  quality is irreducibly judgement.
+  quality is irreducibly judgement. *Also automatable (advisory):* the "should" about tramp
+  parameters, as `ala_lint`'s `tramp` check (a public function carries a parameter unread through
+  another module's function that doesn't read it either). *Human must judge:* whether the carrying
+  function is really a connection mechanism whose job is carrying, and whether the lower abstraction
+  could be configured or wired from the composition instead.
 - **R7 (earns its existence).** *Automatable (advisory):* dead code; trivial single-use one-liners;
   abstraction height past a ceiling. These are reported but **not scored by default** — reuse is
   evidence, not a requirement (see "Helper proliferation" above), so the tool never fails code on
@@ -1069,6 +1839,7 @@ already decide** into the draft: `&entity`/`&aggregate` (R10), `~>` (pass-throug
 completes the `[?]` tags and resolves each `{app-literal?}`; the stamped marks are kept as emitted.
 
 What still can't cross over: R6/R7 (nameability, earns-existence — pure judgement, never encodable),
+the tramp-parameter check (the encoding doesn't carry parameters),
 and two **approximations** flagged as such — abstraction *height* (the encoding carries module-level
 edges, not the call-graph in-degrees the source uses) and the R11 *app-share* aggregate (it assumes
 level 0 is the application tier). Everything else re-lints identically.
@@ -1209,8 +1980,8 @@ His ladder from there, stated as goals (each keeps the ones before it):
    its configuration and wired to the next through a port typed by a programming paradigm, "objects
    with ports that you wire together like electronic components". That doesn't require OOP. Spray
    gets there from procedural code (§3.9): a struct holds the configuration, two more fields hold the
-   wiring, and state joins the struct when it belongs to that concept. "Objects as a language
-   feature, not a design philosophy." Whatever form it takes, writing a new domain abstraction must
+   wiring, and state joins the struct when it belongs to that concept. He sums it up as "objects as a
+   language feature, not a design philosophy" (§3.10). Whatever form it takes, writing a new domain abstraction must
    stay easy: "It is necessary for developers to be able to write new domain abstractions, so this
    needs to be easy" (§1.6.5).
 3. **Several kinds of connection in one app (§1.6.6).** "Monads usually only support dataflow."
@@ -1236,6 +2007,15 @@ Two Elixir-specific notes:
   Spray's objects, but Elixir guidance treats "code organization by process" as an anti-pattern.
   Prefer pure composition values and runners, and use processes where the concept really is
   concurrent.
+- **A `Stream` is a monad chain, with a monad's costs.** Each domain abstraction as a configured
+  `Stream -> Stream` function reads almost like Spray's §1.6.4, and it's standard library. But it is
+  one paradigm and one line, it's pull-driven, and one `Stream.run/1` consumes it, so it suits a batch
+  or a source you can iterate, not a LiveView that receives one reading at a time. Spray's ALA builds
+  the program once and runs it forever (§3.11.3); in Elixir that's a composition value built in
+  `mount/3` or `init/1`, held by its owner, and fed each input ("Functional programming", point 8).
+- **A graph value is a text form of the diagram.** Named instances plus a wire list allow fan-out
+  without processes, and the wiring is data you can print, check for unwired ports, or draw
+  ("Functional programming", point 9).
 
 In the notation: the §1.6.4+ app shows no `pN` wires at all (the runner carries them), no branch, and
 no leaf state. A composition line lists instances, their literals, and how they connect.
@@ -1349,6 +2129,12 @@ settings module every component reads, or application config.)
   the instances, not buried inside a domain module that calls a named process.
 - **PubSub topics.** A topic hardcoded in a domain or feature module is a global event name. If the
   composition owns the topic and hands it down, it's a wire.
+- **Hot push and demand-driven pull.** Spray notes that "If you are using monads, especially I/O
+  monads, or RX (reactive extensions), especially with hot observables, you are already using the
+  wiring pattern" (§7.5). Phoenix PubSub is hot push: messages flow whether or not anyone asked.
+  GenStage and Broadway are pull with back-pressure: consumers ask for demand. That fits Spray's own
+  reasons for pull (lazy or expensive sources, §4.4.3), so it's a choice made at wiring time, not a
+  departure from his push default.
 - **Writing the kind of wire (a suggestion).** The notation has one kind of wire, `pN`. Where it
   matters, a suffix can say which paradigm a wire carries, such as `p2:event`, `p3:inside` (UI
   containment), or `p4:transition`. Spray draws different line meanings in one diagram (§1.6.6) but
@@ -1403,6 +2189,15 @@ The end state is recognizable at a glance: **the tagged layers (the application,
 under it in a bigger app) carry all the literals and only wire; everything they use is a `[]`
 abstraction in a lower layer; and no edge goes sideways or up.** Then take the next step:
 make that top *describe* the connections and let a runner move the data (see "Past the pipe").
+
+**Starting from an existing app.** Don't adopt a whole variant. Adopt the checklist, run `ala_lint`
+against what you have, and let the findings send you to the technique lists under each rule. Most
+well-structured Elixir apps are already close on R1, R2, and R4, because immutability and ordinary
+module boundaries give you a lot. The work that remains is usually R3 (get the constants to the
+top), R5 (name the contracts, and keep the names in the page), and R11 (sort the page's `if`s and move
+the ones that aren't routing). Reach for the heavier techniques (typed outcomes, a manifest,
+committed codegen, a composition value with a runner) only when a rule you care about isn't holding
+by discipline alone. The lightest technique that meets the rule is the right one.
 
 ## Where even the good shape can lie (keep these in the guidance)
 
