@@ -917,8 +917,13 @@ leaving it as background for an earlier rule.
     lower layer.
   - *Verify:* what fraction of the code is the application? For each branch or data assignment in
     it, which of the five kinds is it, and has it been moved?
-  - *Mechanizable:* partly. The share of the code is mechanical, and so is counting branches. Telling
-    the kinds apart is judgement, though some forms are recognizable (see the linter notes).
+  - *Mechanizable:* partly. The share of the code is mechanical, and so is counting branches, `for`
+    loops, arithmetic, and handled data (a result bound from one lower abstraction and passed to
+    another, or passed straight into another's call as an argument; a nested `new` that builds an
+    instance's configuration isn't). A pipe of stages isn't counted,
+    because it is how Elixir writes Spray's §1.6.4 chain, and statically it looks the same as a pipe of
+    values. Telling the kinds of branch apart is judgement, though some forms are recognizable (see
+    the linter notes).
   - *In LiveView:* the framework hands a page events to route, URLs, and a lifecycle to follow, so
     some forms remain: clauses that match an event name and forward it, decoding string params, and
     a lookup from URL to step. None of these is logic. Everything else a page tends to contain (guards,
@@ -966,11 +971,18 @@ leaving it as background for an earlier rule.
       so their `mount/3` has no branch. Auth redirects fit the same hook; untried here.
     - *Generate the glue.* V30's committed codegen makes the page's wiring a generated file, so the
       hand-written page stays thin (§2.5.1). `mix zc.gen --check` fails the build if it drifts.
-    - *Stop handling data at the page.* Three designs reach zero R11 findings, each by a different
-      route: bind every feature output once in one map per page (V39's `Binder`), run the page as a
-      circuit of instances and wires (V40), or make each feature a LiveComponent instance that lands
-      its own outputs and announces the rest (V41). Their costs are under "How close a LiveView page
+    - *Stop handling data at the page.* Three designs get the page's handlers to pure routing, each by
+      a different route: bind every feature output once in one map per page (V39's `Binder`), run the
+      page as a circuit of instances and wires (V40), or make each feature a LiveComponent instance
+      that lands its own outputs and announces the rest (V41). V41 reaches zero R11 findings. V39 and
+      V40 keep store work in page helpers (below). Their costs are under "How close a LiveView page
       can get".
+    - *Move store work out of page helpers.* A private page function that the wiring calls is still
+      application code. V39's and V40's `finalize/2` places the order, loops over the lines to
+      decrement stock, and broadcasts each change; `add_line/2` passes a product read straight into a
+      cart write. Make each a domain abstraction that does its own I/O, configured with its stores
+      (`%PlaceOrder{orders: Orders, products: Products}`), as Spray's `Display` writes to the screen
+      itself. V41 moved the same work into its checkout panel.
   - **What doesn't meet it.**
     - Arithmetic and computed assigns in the page (`assign(socket, :total, Enum.sum(...))`).
     - A business rule in a handler ("can't check out an empty cart" as an `if`).
@@ -1673,8 +1685,9 @@ variants from V28 on compute totals in a feature). Business rules in handlers (V
 `Checkout.start/2` returns `blocked: :empty`, which the page binds to a flash). History in
 `handle_params` (V33's transitions table; V39–V41 pass it in as configuration). Handing values from
 one feature to another (V35 passes them in; V40 makes it a wire). Loading rows in `mount/3` (V40
-wires a store source into the feature's `:load` input; V41's component loads itself). `for` loops
-and compound conditions in the template (a generic list component; a feature computes the boolean).
+wires a store source into the feature's `:load` input; V41's component loads itself). Store work in
+page helpers (V41 moved order placement into its checkout panel; V39 and V40 still keep it on the
+page). `for` loops and compound conditions in the template (a generic list component; a feature computes the boolean).
 
 **What remains in a page that reaches zero.**
 1. routing by event name and URL, which Elixir does with pattern matching instead of port names;
@@ -1690,7 +1703,8 @@ something equivalent. Two smaller residues from V41: a template comparison
 read templates, so only a reader finds it), and hidden subtrees (`send_update` to an unmounted
 component raises, so the cart's instances stay mounted and hidden behind the checkout screen).
 
-**R11 findings by variant** (`ala_lint --super-strict`, which doesn't count routing clauses, `with`,
+**R11 findings by variant** (`ala_lint --super-strict` as of 2026-09-30, which counts `for` loops and
+nested hand-offs, and doesn't count routing clauses, `with`,
 ok/error routing, or the `connected?` guard):
 
 | Variant | R11 findings | What's left in the top layer |
@@ -1698,10 +1712,12 @@ ok/error routing, or the `connected?` guard):
 | thermometer §1.6.3 | 3 | two nil guards and handled data, the things Spray flags in his own §1.6.3 |
 | thermometer §1.6.4 onward, including §1.6.6 in LiveView | 0 | a runner moves the data; the page holds one program value |
 | coffee maker | 4 | its user stories still branch in the composition |
-| V36 | 3 | a plain composition that branches in a few places |
+| V36 | 4 | a plain composition that branches in a few places and hands the cart's result to checkout |
 | V38 | 8 | branching `handle_event` clauses and handled data, kept on purpose (its charter was to evolve a conventional app without adding indirection) |
-| V35 | 4 | URL and sequencing branches from V33's flows |
-| V39, V40, V41 | 0 | routing clauses, param decoding, a URL lookup, and `with` |
+| V35 | 6 | URL and sequencing branches from V33's flows, and two hand-offs from the product store into the cart |
+| V39 | 4 | the order-placement loop and line lookup in page helpers, the portal's `ensure_line/2`, and one handler passing the cart's line to the wishlist |
+| V40 | 3 | the same page helpers as V39 |
+| V41 | 0 | routing clauses, param decoding, a URL lookup, and `with` |
 
 **What reaching zero costs.** Each design is something a team has to learn and keep, which is why
 R11 stays in the linter's strictest tier.
@@ -2215,6 +2231,92 @@ by discipline alone. The lightest technique that meets the rule is the right one
 4. **A perfect shape can encode the wrong program.** The encoding audits *structure*
    (coupling/knowledge placement), not correctness — same caveat the requirements-coverage
    analysis makes for manifests.
+
+## Glossary
+
+The checklist's vocabulary, in alphabetical order. Section numbers point to Spray's site. Where a term is this project's and not Spray's, the entry says so.
+
+**Abstraction.** The only unit of code in ALA: "a 'generalized conceptual idea'", "learnable as a concept" (§2.1.1). In Elixir it is usually a module, sometimes a single function. What makes it an abstraction is that a reader can use it without reading its body.
+
+**Abstraction height.** The longest chain of knowledge dependencies between abstractions. Calls inside one module don't add height. A tall stack of thin layers is a sign of helper proliferation. A linter metric, not Spray's term.
+
+**Application layer.** The top layer. It instantiates abstractions, configures them, and wires them together, and holds all of the app's specific knowledge and none of its logic (§3.5). In a LiveView app, the page, its template, and the router.
+
+**Application literal.** A constant that belongs to this product (a price, a threshold, a label, message text). It lives at the composition (R3). Contrast *intrinsic literal*.
+
+**Communication dependency.** One module calling another to move data or events between them as peers. ALA eliminates these; the layer above wires the peers instead.
+
+**Composition.** Building something from instances of abstractions by connecting them. Spray's opposite is decomposition, splitting a system into specific parts that collaborate (§3.7). "The composition" also names the code that does the composing: the application, or a feature's wiring.
+
+**Configuration.** The settings an instance gets once, when it is created: its main interface, used only by the layer above (R9). R9's "should" keeps configuration apart from run-time data.
+
+**Connection mechanism.** Whatever carries data along a wire at run time: a runner, `with`, a monad's Bind. Guards like "only if there's a value" belong here, not in the application (§1.6.4, §6.1.3).
+
+**Departure.** A place where this checklist knowingly differs from Spray, with a reason, such as the routing clauses a LiveView page must keep. Recorded, kept small, never used for logic.
+
+**Diagram.** Spray's source of truth: boxes are instances, lines are wires, and the whole reads as the requirements (§2.5, §3.6). In Elixir it may be a manifest, a graph value, or a readable composition.
+
+**Domain abstraction.** A reusable abstraction in the layer below the application (or below the features). It knows nothing about this product: `LowPassFilter`, `OffsetAndScale`, a generic table component.
+
+**DTO (data-transfer object).** A type made only to carry data between two modules. Two peers may not share one (§4.8.1).
+
+**Execution model.** The code that makes a kind of connection actually run, such as a runner, an interpreter, or LiveView's event loop. It lives in the Programming Paradigms layer.
+
+**Feature.** A product-knowing abstraction in its own layer under the application, wired by it, used once an application is too big to be one abstraction (§2.2, §7.15).
+
+**Ground symbol.** Spray's name for a wire that joins many ports, like ground on a schematic. It suggests a missing abstraction one layer down (§3.6.1).
+
+**Handling the data.** The application catching one abstraction's result only to pass it to another. Spray names it at his §1.6.3 step and removes it at §1.6.4. An R11 finding.
+
+**Identity key.** An id two features share while each keeps its own data. One way to meet R10, and this project's technique, not Spray's wording.
+
+**Instance.** The run-time use of an abstraction: a configured struct value, a process, or just a reference to a pure function (§3.2.2).
+
+**Intrinsic literal.** A constant that is part of an abstraction's own definition, such as an identity or a physical constant. It stays in the abstraction. Contrast *application literal*.
+
+**Knowledge dependency.** One abstraction using another, more abstract one by name, the way code uses a square root. The only kind of dependency ALA allows, and it must point to something significantly more abstract (§2.1.3, §3.4).
+
+**Layer.** One of a few levels ordered from concrete to abstract. Spray's usual stack is Application, Features, Domain Abstractions, Programming Paradigms, and Foundation. Knowledge only flows down.
+
+**Little ball of mud.** An abstraction's inside, which may be procedural and messy as long as the abstraction is small, names one concept, and is clean at its boundary. ALA governs the relationships between abstractions, not their insides.
+
+**Monad.** A functional pattern that composes functions through a Bind function, which hides execution details. Spray treats monads as the nearest functional analogue of ALA, and as more limited: two ports and one paradigm (§3.11, §6.1–§6.2).
+
+**Must / should.** A "must" is a defect when it fails. A "should" is a prompt a reviewer weighs, used where Spray's evidence is weaker.
+
+**Owned interface.** An interface specific to one module, either defined by a consumer for others to implement (required) or by a module for its peers to call (provided). Both fail R9.
+
+**Pass-through.** A public function with one caller whose body is a single call into another module. It renames a call without hiding a decision. A linter check, advisory.
+
+**Peer.** Another abstraction in the same layer. Peers never know each other. Only a layer above connects them.
+
+**Port.** An input or output of an instance whose type is a programming paradigm from a lower layer, set up by the layer above. In Elixir it's often a protocol, a function passed in, or a pid.
+
+**Program value.** An immutable composition (a chain or a circuit of configured structs) that its owner holds and feeds each input. It's how Elixir keeps a program built once and run forever.
+
+**Programming paradigm.** What a kind of connection means: dataflow, events, UI layout, state-machine transitions, request/response (§4.1). Each one is an abstraction in the Programming Paradigms layer, and ports are typed by them.
+
+**Projection.** A read-only view a feature offers of its data, shaped for its readers, so they never read its struct. A technique for R10.
+
+**Push / pull.** Whether the sender calls the receiver (push) or the receiver asks the sender (pull). Spray defaults to push because it works synchronously or asynchronously (§3.11.4).
+
+**Runner.** A generic execution model that moves data between the instances of a composition value, so the application never touches it.
+
+**Silent contract.** An agreement between two modules that appears in neither's signature, such as a matching string, a tuple shape, or a session key (R5).
+
+**State abstraction.** Spray's `State<T>`: an abstraction with input and output ports that holds state belonging to no other concept, wired in like anything else (§3.9).
+
+**Symbolic connection.** A name used only to connect two points in the code, like a local variable that carries a value between two calls. Fine inside one abstraction; across modules it becomes a registry of global names (§4.7.4, §7.23).
+
+**Tag.** In the checklist's notation, `[thermo]` marks a function that knows a product requirement, and `[]` marks a generic one. The one judgement the notation asks of a human.
+
+**Tramp parameter.** A parameter a function never reads and only carries down to something further below. Spray: middle layers end up with "extra parameters that don't have anything to do with them" (§3.11.1). R6's "should". The term itself is general programming usage, not Spray's.
+
+**Wire.** A run-time connection between two instances' ports, set up by the layer above. Circular wiring is fine; circular knowledge dependencies are not.
+
+**Working chain.** Product-knowing functions that do work and call each other, the shape of the bad thermometer. Each part should be either a real abstraction in a lower layer or wiring in the composition.
+
+**Zero coupling.** No design-time knowledge between peers, not merely less of it. ALA removes bad dependencies rather than loosening them (§7.4).
 
 ---
 
