@@ -525,10 +525,14 @@ leaving it as background for an earlier rule.
     it, which of the five kinds is it, and has it been moved?
   - *Mechanizable:* partly. The share of the code is mechanical, and so is counting branches. Telling
     the kinds apart is judgement, though some forms are recognizable (see the linter notes).
-  - *In LiveView:* a page can't be literally branch-free, because the framework hands it events to
-    route and a lifecycle to follow. "The application layer, and where LiveView pieces sit" has a
-    table of the forms a page typically contains, and says which are wiring, which are logic to move
-    down, and which are framework-imposed departures to keep small.
+  - *In LiveView:* the framework hands a page events to route, URLs, and a lifecycle to follow, so
+    some forms remain: clauses that match an event name and forward it, decoding string params, and
+    a lookup from URL to step. None of these is logic. Everything else a page tends to contain (guards,
+    rules, arithmetic, handled data, history, template loops, even the `connected?/1` guard, which an
+    `on_mount` hook takes out of the page) has one of the moves above, and a page can reach zero
+    logic this way. "The application layer, and where LiveView pieces sit" has a table of the forms a
+    page typically contains, and says which are wiring, which are logic to move down, and which are
+    framework-imposed departures to keep small.
   - *Spray:* §2.9.3 (the coffee maker's application is a diagram of instances; its conditions are
     AND-gate instances, not `if`s); §3.5 ("no normal programming language code such as assignments
     and if statements"); §1.6.3 (the thermometer's `if` flagged as logic); §1.6.4 and §6.1.3 (guards
@@ -583,9 +587,10 @@ cannot fully reach. `ala_lint` encodes this as three tiers, and the classificati
 | **Not machine-scored** | R8 (judgement); the rest of R9 (outputs that name a destination or command, peer DTOs) | a human reads for these |
 
 Two placements are deliberate and follow from the "little ball of mud" reasoning under R7. **R11** is
-aspirational, not required, because a LiveView page can't reach zero branches: the framework hands
-it events to route and a lifecycle to follow. Its findings are still real, and each one is either
-moved or recorded as a departure (see R11).
+aspirational, not required. A LiveView page can reach zero findings, but only by adopting a design
+built for it (results on ports bound by the page, a circuit of instances, or feature instances that
+announce what they did), and a CI gate shouldn't choose the design for a team. Its findings are still
+real, and each one is either moved or recorded as a departure (see R11).
 **Abstraction-height** and **pass-through** are measured on the graph of *abstractions*, not the raw
 call graph: a call inside one module is internal decomposition, so it adds no height and is no
 pass-through; only real hops and public cross-module renames between abstractions count. And
