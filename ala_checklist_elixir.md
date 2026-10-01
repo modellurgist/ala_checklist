@@ -317,6 +317,13 @@ them:
     - A number or message string in a feature or domain module (`@free_over 10_000` inside
       `Shipping`, `"Saved to wishlist"` inside `Wishlist`). V36's features still hold flash text,
       which is why `ala_lint` re-scored V36 lower under the revised R3.
+    - Words a feature builds for display. V39's and V41's cart feature built "free over $50.00" from
+      each shipping rate. Project the values (`cost`, `free_above` as money) and let the component
+      take the words from the page (fixed in the max variants).
+    - Validation messages in a feature's embedded schema (`message: "must be 4–10 digits"`). Pass the
+      form's `messages` as configuration, as the max variants do.
+    - A code or unit in a domain transformer (`currency: "usd"` inside `BuildLineItems`). Configure
+      the instance once (`BuildLineItems.new(currency: StoreConfig.currency())`).
     - A struct default that is really a product decision (`defstruct threshold: 100`).
     - `Application.get_env/2` read inside a domain module for a product value: the module picks its own
       configuration (see R9, "No endpoints"). Reading config in the composition and passing it down is
@@ -438,6 +445,8 @@ them:
     PubSub topic in one place and an Ecto table name in another: a coincidence, not a contract).
     Telling these from real contracts is the reader's job; the linter only sees duplicated text.
   - **What doesn't meet it.**
+    - A label that restates a configured number ("Gift wrap ($2.99)" beside `@gift_wrap_unit 299`):
+      change the fee and the label lies. Build the label from the same attribute.
     - A tuple shape one module produces and another pattern-matches on with no shared definition.
     - A session key written as an atom by a plug and read as a string by the LiveViews (V38's one
       real finding, fixed with a small module both ends depend on).
@@ -618,6 +627,16 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
       def handle(:remove_item, %{id: id}, page), do: Cart.remove(page, id)
       def handle(:checkout, _args, page),        do: Checkout.start(page)
       ```
+    - *Wire with clauses, one per port.* V38-max's page runs each feature step through a 19-line
+      runner that folds every output into the page's own `land/3`; the clauses, one per declared port
+      and contiguous, are the wiring. No catch-all, so a missing wire crashes; a test parses the page
+      source, collects the clause heads, and checks them against every feature's `ports/0` both ways.
+      It needs nothing beyond Elixir; the cost is that only a source reader, not a value, shows the
+      wiring.
+      ```elixir
+      defp land(s, :cart, {:summary, summary}), do: assign(s, :summary, summary)
+      defp land(s, :cart, {:checkout_requested, order}), do: run(s, :checkout, &Checkout.pay(&1, order))
+      ```
     - *Keep the composition inspectable.* A graph value (named instances plus a wire list) can be
       printed, diffed, and drawn; nested closures can't (§3.11.3, §6.2.1). Keeping "create an
       instance" apart from "wire it" lets the code follow the diagram line by line (§6.2.2).
@@ -778,8 +797,10 @@ leaving it as background for an earlier rule.
       `Application.get_env/2` read on every call inside a domain module.
   - **Elixir techniques that meet it.**
     - *Put port protocols in the Programming Paradigms layer.* A protocol or behaviour used as a port
-      belongs to no domain abstraction; a domain module gets a port by implementing it. *Run in the
-      thermometer steps, not tried in a variant.*
+      belongs to no domain abstraction; a domain module gets a port by implementing it. Run in the
+      thermometer steps, and in V39-max: `ZeroCoupled.Ports.Call` (request/response, §4.6) is
+      implemented by the configured `AddLine`, `PlaceOrder` and `StartPayment`, so a binding names the
+      instance instead of a closure.
       ```elixir
       defimpl Step, for: LowPassFilter do
         def push(%{strength: k, last: last} = f, v), do: (out = last + (v - last) / k; {:emit, out, %{f | last: out}})
@@ -976,7 +997,25 @@ leaving it as background for an earlier rule.
       page as a circuit of instances and wires (V40), or make each feature a LiveComponent instance
       that lands its own outputs and announces the rest (V41). V41 reaches zero R11 findings. V39 and
       V40 keep store work in page helpers (below). Their costs are under "How close a LiveView page
-      can get".
+      can get". The max variants reach 100 on the full walk three ways: V41-max (V41 plus one route
+      table per page), V39-max (V39 with store work behind a `Call` port and no composed inputs), and
+      V38-max (plain clauses, one per port).
+    - *Make mount an event on the diagram.* Loading in `mount/3` hands a store's result to a
+      feature. V39-max delivers `{:page, :mounted}` through its bindings, where it is bound to
+      `{:via, &Carts.list_items/1, [{:input, :cart, &Cart.load/2}]}`. V38-max configures the Cart
+      feature with its store, so `Cart.load/2` reads it; V41's panels load themselves.
+    - *Replace a composed input with an output.* A handler that reads assigns to build another
+      feature's input (V39's `pay` fetching stock, `toggle_wishlist` finding the line) becomes one
+      input on the first feature whose output carries the value: `Cart.request_checkout/2` emits
+      `checkout_requested: cart`, bound to `Checkout.pay/2`.
+    - *Route every announcement explicitly, and test that you do.* A page's multi-clause
+      `handle_info` is its wiring. With a catch-all clause, an announcement nobody routes disappears
+      silently. Without one, it crashes the page, and a test can send every port each instance
+      declares it announces (`announces/0`) and fail on a missing clause (V41's 2026-09-30
+      revision). The trade: the page must also ignore, explicitly, every broadcast on a shared topic
+      it doesn't use, and a new fact on that topic crashes subscribed pages until they get a clause.
+      Explicit is safer where the test suite runs on every change; the catch-all is the more
+      tolerant default where it doesn't.
     - *Move store work out of page helpers.* A private page function that the wiring calls is still
       application code. V39's and V40's `finalize/2` places the order, loops over the lines to
       decrement stock, and broadcasts each change; `add_line/2` passes a product read straight into a
@@ -1718,6 +1757,8 @@ ok/error routing, or the `connected?` guard):
 | V39 | 4 | the order-placement loop and line lookup in page helpers, the portal's `ensure_line/2`, and one handler passing the cart's line to the wishlist |
 | V40 | 3 | the same page helpers as V39 |
 | V41 | 0 | routing clauses, param decoding, a URL lookup, and `with` |
+| V42 | 0 | V40's circuit, with the page helpers' store work moved into domain abstractions |
+| V41-max, V39-max, V38-max | 0 | the forced forms only; each scores 100 on the full walk (V41-max 99.5, its hop) |
 
 **What reaching zero costs.** Each design is something a team has to learn and keep, which is why
 R11 stays in the linter's strictest tier.
@@ -1730,8 +1771,34 @@ R11 stays in the linter's strictest tier.
   Cross-feature effects take two message hops, and the design lives in about twenty `handle_info`
   clauses instead of one table. Familiarity 5.
 
-The linter scores all three within a point of each other (97 under `--strict`). What separates them
+- *V38-max, clauses as wires:* a 19-line runner and one `land/3` clause per port, checked by a test
+  that reads the clause heads. Zero hops. Familiarity 4. Shown on a smaller app, so how clauses read at
+  forty ports is open.
+
+The linter scores the first three within a point of each other (97 under `--strict`). What separates them
 is what it can't see: readability, hops, and vocabulary.
+
+**Past zero: 100 on the full walk.** Three variants were changed, in copies, until a rule-by-rule hand walk
+found nothing to deduct: V41-max (99.5, its hop), V39-max and V38-max, each at 100. The calls that hold
+those scores up, made the same way in all three: one-line domain rules (a fee, a line total) count as
+concepts though the linter's R6 heuristic flags them; configured rule instances several features receive
+count as configuration, not R10 shared data; report-only numbers (public surface, module size, V38-max's
+28% application share of functions) stay unscored; and V38-max is a smaller app (about 3,050 lines against
+4,900), with fewer places to lose points. Limits of the measurement that the exercise exposed:
+- *Hand walks miss things.* The second and third walks found four findings in code the first shared (words
+  built in a feature, validation messages in feature schemas, a currency code in a domain module, a label
+  restating a configured fee), so earlier published full scores ran about a point generous.
+- *The scale caps each kind of finding* (R11 at two points), so it can't tell a page that is all logic from
+  one with a few branches.
+- *Judgement calls move it.* Reversing two of the calls above turns a 100 into about 99.
+- *The linter can't see* templates, message hops, or R8, and scores variants that walk at 88 and at 100
+  within a few points.
+- *The rules reward absence, not assurance:* a checked, drawn diagram (V42) earns nothing more once the page
+  is clean.
+Limits on reaching it: every design needs a wiring paradigm a team must learn (familiarity fell a point in
+each), a test that every declared port is wired, and, for components, the hop and hidden subtrees. V38's
+character (a conventional page that keeps its logic) can't survive 100, and whether clause wiring reads well
+at forty ports is untried.
 
 **One placement held loosely.** V41's feature panels are LiveComponents placed in the Features layer:
 the page configures and wires each one, and none names the page. But their markup is shaped for this
