@@ -313,6 +313,48 @@ them:
     - *Pass message text in too.* Flash and label text is an application literal. The page supplies it
       as configuration, or maps a feature's fact to text (V39's page binds `{:cart, :removed}` to a
       flash it words itself).
+    - *Supply every word from the page as a map.* The page holds its words in one `@texts` map,
+      merges in the words the store shares, and passes each component or panel its part as an
+      attribute (`t`). Components render only what they're given. Used by all three max variants.
+      ```elixir
+      @texts %{cart: %{discount: "Discount", row: %{save: "Save for later", each: " each"}}}
+      defp texts, do: update_in(@texts, [:cart], &Map.merge(&1, StoreConfig.summary_texts()))
+
+      <.cart_item_row row={row} t={@texts.cart.row} ... />   <%!-- the row shows @t.save, never a literal --%>
+      ```
+    - *Give forms their messages as configuration.* A feature's embedded schema validates, but the
+      words of the error come from the page. V41-max and V39-max pass `messages` when they build
+      Checkout and PortalSubmit.
+      ```elixir
+      def changeset(address, params, messages) do
+        address |> cast(params, @fields) |> validate_format(:postal_code, ~r/^\d{4,10}$/, message: messages.postal_code)
+      end
+
+      Checkout.new(flow: @flow, messages: %{postal_code: "must be 4–10 digits"}, ...)
+      ```
+    - *Project values, not words.* A feature returns the amounts a sentence needs, and the component
+      writes the sentence with the page's words. The max variants replaced a `price_label` the Cart
+      feature built ("free over $50.00") with money values.
+      ```heex
+      # feature: values only
+      %{method: rate.method, label: rate.label, cost: Money.new(rate.cost),
+        free_above: rate.free_above && Money.new(rate.free_above)}
+
+      # component: the page's words
+      {opt.cost}<span :if={opt.free_above}> ({@t.free_over} {opt.free_above})</span>
+      ```
+    - *Keep store-wide literals in one application module.* Rates, thresholds, currency and the
+      words several pages share live in one module in the application layer that both pages read
+      (V41-max and V39-max's `StoreConfig`, V38's `GoodDeal.Catalog`). Domain modules never read it;
+      pages pass its values down.
+      ```elixir
+      defmodule ZeroCoupledWeb.StoreConfig do
+        def rates, do: %{standard: %{label: "Standard (5–7 days)", cost: 599, free_above: 5000}, ...}
+        def low_stock_at, do: 5
+        def currency, do: "usd"
+        def summary_texts, do: %{items: "Items", subtotal: "Subtotal", total: "Total", free: "Free"}
+      end
+      ```
   - **What doesn't meet it.**
     - A number or message string in a feature or domain module (`@free_over 10_000` inside
       `Shipping`, `"Saved to wishlist"` inside `Wishlist`). V36's features still hold flash text,
@@ -440,6 +482,20 @@ them:
     - *Check the places signatures can't reach.* V32's `ComponentPurity` checker looks inside HEEx,
       where a `phx-click="save"` string is a contract the compiler never sees. A companion
       `ContractPurity` check (V33) covers the contract names themselves.
+    - *Derive a label from the value it states.* A label that quotes a configured number is built
+      from the same attribute, so changing the fee can't leave the label stale (V41-max, V39-max).
+      ```elixir
+      @gift_wrap_unit 299
+      put_in(texts, [:cart, :gift_wrap_label], "Gift wrap (#{Money.new(@gift_wrap_unit)})")
+      ```
+    - *State a domain constant once, and ask for it.* When a rule's constant ("a line can't go below
+      1") is needed in two places, the module that owns the rule answers the question instead of the
+      other repeating the number (V38-max's first version, in `Lines`).
+      ```elixir
+      @minimum 1
+      def update_quantity(items, id, delta), do: ... max(@minimum, item.quantity + delta) ...
+      def at_minimum?(%{quantity: q}), do: q <= @minimum     # the Cart feature's row asks this
+      ```
   - **What doesn't count as a silent contract.** A `~p"/cart"` route, which the router checks at
     compile time. Two equal strings that mean different things (V38 found `"products"` used as a
     PubSub topic in one place and an Ecto table name in another: a coincidence, not a contract).
@@ -599,6 +655,13 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     - *Mind both size bounds, and the port count.* 100 to 500 lines per abstraction; averaging under 100
       means "more abstractions than we need" (Summary). "Abstractness decreases with more ports"
       (§7.2.3), so a module with a long list of inputs is probably too specific.
+    - *Derive a declaration instead of restating it.* A LiveComponent panel lands some of its
+      feature's outputs itself and announces the rest. Declaring only the landed ones and deriving
+      the announced list from the feature's `ports/0` means the two can't drift (V41-max).
+      ```elixir
+      @lands_only [:rows, :changed]
+      def announces, do: Keyword.keys(Cart.ports().out) -- @lands_only
+      ```
   - **What doesn't meet it.** A module that only forwards to another; a manifest or codegen step
     for a page with two features and one reaction (V35's lesson: declare in a manifest once the wiring
     is numerous or regular, inline in the composition while it's rare).
@@ -627,7 +690,7 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
       def handle(:remove_item, %{id: id}, page), do: Cart.remove(page, id)
       def handle(:checkout, _args, page),        do: Checkout.start(page)
       ```
-    - *Wire with clauses, one per port.* V38-max's page runs each feature step through a 19-line
+    - *Wire with clauses, one per port.* V38-max's pages run each feature step through a small
       runner that folds every output into the page's own `land/3`; the clauses, one per declared port
       and contiguous, are the wiring. No catch-all, so a missing wire crashes; a test parses the page
       source, collects the clause heads, and checks them against every feature's `ports/0` both ways.
@@ -640,6 +703,68 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     - *Keep the composition inspectable.* A graph value (named instances plus a wire list) can be
       printed, diffed, and drawn; nested closures can't (§3.11.3, §6.2.1). Keeping "create an
       instance" apart from "wire it" lets the code follow the diagram line by line (§6.2.2).
+    - *Hold cross-component wiring in one route table.* When feature instances are LiveComponents
+      that announce to the page, one map per page says where each announcement goes, and one
+      `handle_info` clause applies it through a generic router with a few target kinds. Spray:
+      connections "are typically cohesive, and belong in one place" (§3.3.1). V41-max; the cost is
+      one hop per cross-feature effect.
+      ```elixir
+      @routes %{
+        {:cart, :removed} => [pass: {Undo.Banner, "undo", :capture}],
+        {:undo, :restored} => [pass: {Cart.Panel, "cart", :receive}, flash: {:info, "Item restored"}],
+        {:checkout, :step} => [patch: @step_paths]
+      }
+      def handle_info({_, _, _} = announcement, socket),
+        do: {:noreply, Instance.route(socket, @routes, announcement)}
+      ```
+    - *Run clause wiring with a tiny runner.* The clause-wiring technique above needs one generic
+      function in the paradigm layer that runs a feature step, stores the new state, and folds each
+      output through the page's `land/3` (V38-max's `Steps`: `run`, `feed`, `stream_change`, `patch`, and a named timer, 56 lines).
+      ```elixir
+      def run(socket, key, step, land) do
+        {state, outputs} = step.(socket.assigns[key])
+        Enum.reduce(outputs, assign(socket, key, state), &land.(&2, key, &1))
+      end
+      ```
+    - *Test that every port is wired.* Each wiring form needs a coverage test, because an unwired
+      output is lost or crashes only at run time. It's one small test per page (or per wiring form),
+      generated over the declared ports, not one test per port. V41-max sends every announced port
+      to the page. V39-max checks its map's keys against `ports/0` and a `grounded/0` list of ports
+      deliberately left unbound. V38-max reads its clause heads from source.
+      ```elixir
+      # V39-max: every declared output is bound or grounded
+      for {key, feature} <- page.features(), port <- Keyword.keys(feature.ports().out),
+          do: assert({key, port} in Map.keys(page.bindings(1)) ++ page.grounded())
+
+      # V38-max: collect land/3 clause heads from the page source
+      Macro.prewalk(Code.string_to_quoted!(File.read!(@source)), [], fn
+        {:defp, _, [{:land, _, [_, key, {port, _}]} | _]} = n, acc -> {n, [{key, port} | acc]}
+        n, acc -> {n, acc}
+      end)
+      ```
+    - *Name instances in the wiring instead of reading assigns.* A clause that needs a configured
+      instance names it, and the runner looks it up in one map the page builds at mount. No clause
+      reads `s.assigns`, and a wrong name fails where it's named (V45).
+      ```elixir
+      instances: %{add_line: %AddLine{carts: Carts, products: Products, cart_id: cart_id}, charge: %Charge{...}}
+
+      defp land(s, :wishlist, {:taken, product}),
+        do: Steps.feed(s, :cart, &Cart.receive/2, {:add_line, &AddLine.run/2}, product, &land/3)
+      ```
+    - *Make the coverage check one line, or a compile error.* A paradigm-layer `Wiring.gaps/1` reads
+      a page's source from its compile info and compares its clause heads with every port its
+      features declare, so each page's test is one line. `use Wiring` makes the same check while the
+      page compiles; it's optional, because a macro with definition hooks costs familiarity (V45).
+      ```elixir
+      assert Wiring.gaps(GoodDealWeb.CartLive.Show) == %{unwired: [], unknown: []}
+      # opt in: `use GoodDealWeb.Paradigms.Wiring` fails the build with
+      # "land/3 wiring gaps in GoodDealWeb.CartLive.Show: %{unknown: [], unwired: [ui: :tab]}"
+      ```
+  - **Clauses or a value (settled 2026-10-01).** Wiring written as function clauses in one module
+    (`handle_info` clauses on a page, or one `land/3` clause per port) meets R8: it is one place, which is
+    what Spray asks of connections (§3.3.1). A wiring value (a map, a route table, a circuit) is a
+    technique, not a requirement: it adds inspection and checking by key, at the cost of vocabulary.
+    Elixir adaptation: multi-clause functions are this checklist's reading of a wiring list.
   - **What doesn't meet it.** Wiring spread across several modules' labels, so no one place shows it;
     a page whose callbacks compute; configuration keys that don't name what they configure.
   - *Spray:* §2.4 (executable expression of requirements; 3–10% of the code); §3.5; §3.6 (diagrams
@@ -845,6 +970,37 @@ leaving it as background for an earlier rule.
     - *Test against ports.* Pass a fake into the port (a stub struct implementing the protocol, a
       function, or a test pid as the output). Mox is fine for a paradigm-layer behaviour, since that
       *is* a port (see "Tests replace only ports" in the verify procedure).
+    - *Configure domain instances once, configuration first.* Every rule the pages used per call
+      became a struct the page builds once and passes down: rates, promo codes, the gift-wrap fee,
+      the low-stock level, the currency. Run-time data comes after it.
+      ```elixir
+      BuildLineItems.new(currency: StoreConfig.currency())        # built once by the page
+      BuildLineItems.call(c.line_items, Cart.items(cart))          # used with config first
+      Inventory.status(Inventory.new(low_at: 5), product.stock)
+      ```
+    - *Implement a paradigm port for request/response.* A protocol in the paradigm layer that no
+      domain module owns lets configured instances that do I/O be named in the wiring instead of
+      wrapped in closures (V39-max's `Ports.Call`, request/response in Spray's §4.6).
+      ```elixir
+      defprotocol ZeroCoupled.Ports.Call do
+        def call(instance, payload)
+      end
+
+      defimpl ZeroCoupled.Ports.Call, for: ZeroCoupled.Domain.StartPayment do
+        def call(%{gateway: g, urls: urls, cart_key: key}, {line_items, cart_id}),
+          do: g.create_checkout_session(line_items, %{key => cart_id}, urls)
+      end
+
+      {:checkout, :ready_to_pay} => [{:async, :payment, %StartPayment{gateway: ..., urls: ..., cart_key: ...}}]
+      ```
+    - *Name outputs as facts, and let the wiring turn them into actions.* `persist` became
+      `changed`, Undo's `timer` became `captured`, `payment` became `ready_to_pay`, and the cart's
+      "pay" became `checkout_requested`. In V39-max the page's bindings start and stop the undo
+      clock on those facts.
+      ```elixir
+      {:undo, :captured} => [{:set, :undo_pending, true}, {:start_timer, :undo, StoreConfig.undo_window_ms()}],
+      {:undo, :restored} => [{:stop_timer, :undo}, {:input, :cart, &Cart.receive/2}]
+      ```
   - **What doesn't meet it.** A `@callback` a feature defines for a peer (`Checkout.PaymentGateway`);
     `Inventory.Behaviour` written so peers can mock `Inventory`; a struct one peer defines and another
     matches on, even if moved to a shared module; an output that names a stream, topic, or message text;
@@ -1002,7 +1158,7 @@ leaving it as background for an earlier rule.
       V38-max (plain clauses, one per port).
     - *Make mount an event on the diagram.* Loading in `mount/3` hands a store's result to a
       feature. V39-max delivers `{:page, :mounted}` through its bindings, where it is bound to
-      `{:via, &Carts.list_items/1, [{:input, :cart, &Cart.load/2}]}`. V38-max configures the Cart
+      `{:via, &Carts.list_items/1, [{:input, :cart, &Cart.load/2}]}`. V38-max does the same through its runner, `Steps.feed(:cart, &Cart.load/2, &Carts.list_items/1, cart_id, &land/3)`. A first version of V38-max configured the Cart
       feature with its store, so `Cart.load/2` reads it; V41's panels load themselves.
     - *Replace a composed input with an output.* A handler that reads assigns to build another
       feature's input (V39's `pay` fetching stock, `toggle_wishlist` finding the line) becomes one
@@ -1022,6 +1178,45 @@ leaving it as background for an earlier rule.
       cart write. Make each a domain abstraction that does its own I/O, configured with its stores
       (`%PlaceOrder{orders: Orders, products: Products}`), as Spray's `Display` writes to the screen
       itself. V41 moved the same work into its checkout panel.
+    - *Place parts with generic components instead of comparing in the template.* Comparisons a
+      template needs (which tab, which step, is a count zero, is the button disabled) move into
+      generic components that take the current value and the name. All three max variants use them.
+      ```heex
+      <.tabs current={@active_tab} event="switch_tab"><:tab name={:items} label={@texts.tabs.items} /></.tabs>
+      <.pane current={@active_tab} name={:items}>...</.pane>          <%!-- kept mounted, hidden --%>
+      <.only_on current={@step} name={:payment}>...</.only_on>       <%!-- rendered only when current --%>
+      <.none count={@saved_count}>{@texts.saved.empty}</.none>
+      ```
+    - *Put a rule's display beside the rule.* A product page's `case` on stock status became a
+      domain UI component that takes the configured rule and the page's labels (`StockIndicator`, in
+      all three max variants). It sits in the domain, next to the rule it uses, so the edge drops
+      (R1).
+      ```heex
+      <.stock_indicator stock={product.stock} rule={@stock_rule} labels={@stock_labels} />
+      ```
+    - *Let rows carry the booleans the template needs.* A feature's row projection includes what the
+      template would otherwise compute (`at_minimum`, not `quantity <= 1`), or a row component takes
+      the list it checks membership in.
+      ```elixir
+      at_minimum: Lines.at_minimum?(line)                      # in the feature's row/2
+      <.cart_item_row row={row} wishlist_ids={@wishlist_ids} />  # the component decides the mark
+      ```
+    - *Configure a feature with its store so it loads itself.* Instead of reading the store in
+      `mount/3` and handing rows to a feature, give the feature its store as configuration and a
+      `load` input (V41's panels; V38-max's first version).
+      ```elixir
+      Cart.new(cart_id: cart_id, store: Carts, shipping: Shipping.new(...), ...)
+      def load(cart, _), do: (cart = %{cart | items: cart.store.list_items(cart.cart_id)}; {cart, [rows: {:reset, rows(cart)}]})
+      ```
+    - *Add the foundation function that removes a hand-off.* `Products.get!(id) |>
+      Products.delete()` in a handler is the page passing one store result into another call. A
+      store function that does both (`Products.delete_by_id/1`) keeps the handler to one call.
+      ```elixir
+      def handle_event("delete", %{"id" => id}, socket) do
+        {:ok, product} = Products.delete_by_id(id)
+        {:noreply, stream_delete(socket, :products, product)}
+      end
+      ```
   - **What doesn't meet it.**
     - Arithmetic and computed assigns in the page (`assign(socket, :total, Enum.sum(...))`).
     - A business rule in a handler ("can't check out an empty cart" as an `if`).
@@ -1435,6 +1630,11 @@ human tests it cannot. Fail any and it is not ALA.
      paradigm-layer behaviour is a fake port, which is fine. A Mox mock of a lower-layer module is
      the failing case. A LiveView test of a page with its real features is the acceptance test. A test
      that must replace a *peer* by name is a sign the peer was never behind a port (R1, R9).
+9. **Wait for async work in page tests.** When a page starts a task (`start_async`), a test that reads the page right after the click is racing it. Use `render_async/1`, which waits for the page's async results. V39-max's payment-retry test passed or failed by timing until it did.
+   ```elixir
+   lv |> element("button", "Pay") |> render_click()
+   assert render_async(lv) =~ "Payment failed."
+   ```
 
 ## Helper proliferation: the real problem R7 is chasing
 
@@ -1742,23 +1942,23 @@ something equivalent. Two smaller residues from V41: a template comparison
 read templates, so only a reader finds it), and hidden subtrees (`send_update` to an unmounted
 component raises, so the cart's instances stay mounted and hidden behind the checkout screen).
 
-**R11 findings by variant** (`ala_lint --super-strict` as of 2026-09-30, which counts `for` loops and
-nested hand-offs, and doesn't count routing clauses, `with`,
-ok/error routing, or the `connected?` guard):
+**R11 findings by variant** (`ala_lint --super-strict`; the 2026-09-30 linter counts `for` loops and
+nested hand-offs, and doesn't count routing clauses, `with`, ok/error routing, or the `connected?` guard;
+the 2026-10-01 linter also reads HEEx templates):
 
-| Variant | R11 findings | What's left in the top layer |
-|---|---:|---|
-| thermometer §1.6.3 | 3 | two nil guards and handled data, the things Spray flags in his own §1.6.3 |
-| thermometer §1.6.4 onward, including §1.6.6 in LiveView | 0 | a runner moves the data; the page holds one program value |
-| coffee maker | 4 | its user stories still branch in the composition |
-| V36 | 4 | a plain composition that branches in a few places and hands the cart's result to checkout |
-| V38 | 8 | branching `handle_event` clauses and handled data, kept on purpose (its charter was to evolve a conventional app without adding indirection) |
-| V35 | 6 | URL and sequencing branches from V33's flows, and two hand-offs from the product store into the cart |
-| V39 | 4 | the order-placement loop and line lookup in page helpers, the portal's `ensure_line/2`, and one handler passing the cart's line to the wishlist |
-| V40 | 3 | the same page helpers as V39 |
-| V41 | 0 | routing clauses, param decoding, a URL lookup, and `with` |
-| V42 | 0 | V40's circuit, with the page helpers' store work moved into domain abstractions |
-| V41-max, V39-max, V38-max | 0 | the forced forms only; each scores 100 on the full walk (V41-max 99.5, its hop) |
+| Variant | R11 findings, 2026-09-30 | 2026-10-01 (templates read) | What's left in the top layer |
+|---|---:|---:|---|
+| thermometer §1.6.3 | 3 | 3 | two nil guards and handled data, the exact things Spray flags in his own §1.6.3 |
+| thermometer §1.6.4 onward, including §1.6.6 in LiveView | 0 | 0 | a runner moves the data; the page holds one program value |
+| coffee maker | 4 | 14 | its user stories still branch in the composition, the step the thermometer takes at §1.6.4; its template computes too |
+| V36 | 4 | 4 | a plain composition that branches in a few places and hands the cart's result to checkout |
+| V38 | 8 | 82 | branching handlers, handled data and template logic, kept on purpose (its charter was to evolve a conventional app without adding indirection); built out to the full requirements on 2026-10-01, with 39% of application functions holding logic |
+| V35 | 6 | 46 | URL and sequencing branches from V33's flows, two hand-offs from the product store into the cart, and logic in its views' markup |
+| V39 | 4 | 27 | the order-placement loop and line lookup in page helpers, a handler passing the cart's line to the wishlist, and logic in its views' markup |
+| V40 | 3 | 26 | the same page helpers as V39, and comparisons and loops in its components' markup |
+| V41 | 0 | 8 | tab and step comparisons and a tab loop in the pages' markup; otherwise routing clauses, param decoding, a URL lookup, and `with` |
+| V42 | 0 | 20 | V40's circuit without the page helpers; comparisons and loops in its components' markup |
+| V41-max, V39-max, V38-max, V45 | 0 | 0 | only the forced forms; each also scores 100 on the full hand walk |
 
 **What reaching zero costs.** Each design is something a team has to learn and keep, which is why
 R11 stays in the linter's strictest tier.
@@ -1771,11 +1971,15 @@ R11 stays in the linter's strictest tier.
   Cross-feature effects take two message hops, and the design lives in about twenty `handle_info`
   clauses instead of one table. Familiarity 5.
 
-- *V38-max, clauses as wires:* a 19-line runner and one `land/3` clause per port, checked by a test
-  that reads the clause heads. Zero hops. Familiarity 4. Shown on a smaller app, so how clauses read at
-  forty ports is open.
+- *V38-max, clauses as wires:* a 56-line runner and one `land/3` clause per port (44 across the cart
+  and portal pages, built out to the full requirements on 2026-10-01), checked by one test per page that
+  reads the clause heads. Zero hops. Familiarity 4. At 44 ports the clauses still read as a list.
+- *V45, checked clauses:* V38-max with its store-work instances named in one `@instances` map (no
+  clause reads assigns), a one-line coverage test per page (`Wiring.gaps/1`), and an optional
+  compile-time wiring check (`use Wiring`). 100 on the walk, lint 100/100/99, zero hops, about the size of
+  the other full variants. Familiarity 4.
 
-The linter scores the first three within a point of each other (97 under `--strict`). What separates them
+The linter scores the first three within a point of each other (97 under `--strict` on the 2026-09-30 linter; 94 or 95 on the 2026-10-01 one). What separates them
 is what it can't see: readability, hops, and vocabulary.
 
 **Past zero: 100 on the full walk.** Three variants were changed, in copies, until a rule-by-rule hand walk
@@ -1783,8 +1987,8 @@ found nothing to deduct: V41-max (99.5, its hop), V39-max and V38-max, each at 1
 those scores up, made the same way in all three: one-line domain rules (a fee, a line total) count as
 concepts though the linter's R6 heuristic flags them; configured rule instances several features receive
 count as configuration, not R10 shared data; report-only numbers (public surface, module size, V38-max's
-28% application share of functions) stay unscored; and V38-max is a smaller app (about 3,050 lines against
-4,900), with fewer places to lose points. Limits of the measurement that the exercise exposed:
+22% application share of functions) stay unscored. V38-max was first built on a smaller app; since
+2026-10-01 it meets the same requirements as the others, at about 4,800 lines. Limits of the measurement that the exercise exposed:
 - *Hand walks miss things.* The second and third walks found four findings in code the first shared (words
   built in a feature, validation messages in feature schemas, a currency code in a domain module, a label
   restating a configured fee), so earlier published full scores ran about a point generous.
@@ -1797,8 +2001,8 @@ count as configuration, not R10 shared data; report-only numbers (public surface
   is clean.
 Limits on reaching it: every design needs a wiring paradigm a team must learn (familiarity fell a point in
 each), a test that every declared port is wired, and, for components, the hop and hidden subtrees. V38's
-character (a conventional page that keeps its logic) can't survive 100, and whether clause wiring reads well
-at forty ports is untried.
+character (a conventional page that keeps its logic) can't survive 100. Clause wiring was tried at 44 ports
+(V38-max built out, 2026-10-01) and still reads as a list.
 
 **One placement held loosely.** V41's feature panels are LiveComponents placed in the Features layer:
 the page configures and wires each one, and none names the page. But their markup is shaped for this
@@ -1868,6 +2072,10 @@ decidable. Read each note as "what a human must still judge."
   composition layer. *Human must judge:* whether a literal is an *application literal* (should hoist) or an
   *intrinsic literal* (a validation regex, a physical constant that belongs in its
   abstraction), and whether the "composition" is really where requirements should read.
+  *Also automatable (2026-10-01):* words below the page in markup (text nodes and label-like
+  attributes of lower layers' `~H`/`.heex`), validation `message:` strings, sentences built by
+  interpolation, and `currency:`/`unit:` codes. *Human must judge:* whether a word is the product's
+  (hoist it) or the abstraction's own (an error name a developer reads).
 - **R4 (state owned, not hidden).** *Automatable:* the process dictionary; some `Agent`/`:ets`
   stashing. *Human must judge:* whether GenServer/process state is legitimate instance state or a
   hidden cross-call channel whose state belongs to some concept's abstraction (or to a wired
@@ -1876,7 +2084,8 @@ decidable. Read each note as "what a human must still judge."
   (extendable to) tagged-tuple message shapes. *Human must judge:* contracts that are **invisible
   to the AST** — anything inside `~H`/templates/EEx, cross-language constants (server string ↔ JS),
   or two ends that agree via *different* literals (a produced format parsed elsewhere). The tool
-  sees textual duplication, not semantic agreement.
+  sees textual duplication, not semantic agreement. *Also automatable (2026-10-01):* a `$2.99`-style
+  amount in a string whose cents are also a configured integer (a label restating configuration).
 - **R6 (nameability).** *Automatable (weakly):* single-letter/`f\d` names, functions that wrap one
   primitive. *Human must judge:* the actual rule — "does this name a **learnable concept**?" A
   meaningful predicate (`empty?`) trips the primitive-wrapper heuristic (false positive); a
@@ -1885,7 +2094,8 @@ decidable. Read each note as "what a human must still judge."
   parameters, as `ala_lint`'s `tramp` check (a public function carries a parameter unread through
   another module's function that doesn't read it either). *Human must judge:* whether the carrying
   function is really a connection mechanism whose job is carrying, and whether the lower abstraction
-  could be configured or wired from the composition instead.
+  could be configured or wired from the composition instead. The wrapper heuristic spares a function
+  whose first parameter is its own configured struct (a configured rule, not a renamed operator).
 - **R7 (earns its existence).** *Automatable (advisory):* dead code; trivial single-use one-liners;
   abstraction height past a ceiling. These are reported but **not scored by default** — reuse is
   evidence, not a requirement (see "Helper proliferation" above), so the tool never fails code on
@@ -1896,7 +2106,24 @@ decidable. Read each note as "what a human must still judge."
 - **R8 (reads as the requirements; names/config/shape serve the reader).** *Not automatable at
   all* — pure judgement. "Does the composition read as the spec?" and "are these good names?" have
   no shape-based decision procedure. R8 is the honest boundary: a linter can *prompt* it, never
-  score it.
+  score it. `ala_lint` prompts three R8 concerns (2026-10-01), never scored: a declared output no
+  composer names (`:ports_unwired`, a prompt for a coverage test), a capture of a private page helper
+  that closes over a variable (`:wiring_closure`), and the size of a paradigm's wiring vocabulary
+  (`:vocabulary`).
+- **R9 (ports by paradigm).** *Automatable:* owned interfaces across a boundary (exact on
+  `@behaviour`/`defimpl`), and drift between a feature's declared `ports/0` and the outputs it
+  builds (`:ports`). *Human must judge:* whether an output reads as a fact or names its destination.
+- **R10 (no shared entity).** *Automatable:* a struct read by two or more features. Configured
+  instances (a struct its own functions take as configuration and never update) are excluded.
+  *Human must judge:* whether the rest are shared meaning or a legitimate domain abstraction.
+- **R11 (composition only).** *Automatable, given a layer map:* branches, arithmetic, `for`, handled
+  data and working chains in application functions; and, from 2026-10-01, logic in application
+  templates (comparisons, arithmetic, `case`/`if`, `:for`, calls into lower modules), an assign
+  passed as a non-first argument into a feature or domain function, and a private page helper doing
+  store work (two or more bottom-layer calls). The scale caps each kind of finding, so the linter
+  also reports `:r11_share`, the percentage of application functions with any R11 finding, and
+  `:hops`, pages that relay between LiveComponents. *Human must judge:* whether a flagged form is
+  one of the forced LiveView departures.
 
 Two whole-design properties **no single-snapshot linter can check** (they need more than the code):
 **reuse** (does an abstraction wire into two or more consumers unchanged? That needs a second
