@@ -879,7 +879,7 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     | Circuit of instances and wires | V40, V42 | a circuit value per page (V42: a diagram module) | a generic circuit runner | 2 | V42: every wire and unused output at mount | 2 |
     | Feature LiveComponents plus `handle_info` | V41 | the panels' own wires plus the page's clauses | LiveView, `send_update` | 2 | a test sends every port output | 5 |
     | Feature LiveComponents plus a route table | V41-max | the panels' `@wired_here` plus one `@routes` map | `Instance.route/3` with nine kinds | 1 | a test sends every port output | 4 |
-    | `wire/3` clauses plus a runner | V38-max, V45, V48 | one clause per port in the page | `Steps` (V45: named `@instances`) | 0 | clause heads read from source (V45: `Wiring.gaps/1`, optional compile-time check) | 4 |
+    | `wire/3` clauses plus a runner | V38-max, V45, V48, V50 (V50: no named instances, so familiarity 5) | one clause per port in the page | `Steps` (V45: named `@instances`) | 0 | clause heads read from source (V45: `Wiring.gaps/1`, optional compile-time check) | 4 |
     | Generic host plus slots (toy, unpublished) | slot-split toy | the page's template and routes | `Paradigms.Hosted` runs any feature | 1 | as V41-max | 3 |
     | Story clauses | V46 | each story's `wire/4`, `input/4`, `event/4`; the page's `wire/3` between stories | `Story` (nests), `Sinks` | 0 | `Wiring.gaps/1`, `story_gaps/1`, `event_clashes/1` | 3 |
     | Typed story maps | V47 | each story's bindings map; the page's map of `{:to, story, port}` | `Binder` (nests) | 0 | every port typed; the composition checked at mount; a Mermaid diagram drawn from it | 3 |
