@@ -112,6 +112,56 @@ them:
    application too: when the application gets large, it becomes a composition of Features (§7.15).
    R7 and the module-size check cover this, and R11 covers the application's share.
 
+## What a domain abstraction is, and its kinds (UI and others)
+
+**"Domain" is Spray's word for a family of applications, not a domain model.** Domain abstractions
+"are more specific to the types of applications we want to express using them. They are specific to
+a domain, making them more expressive, but less reusable than general purpose library abstractions.
+They are still reusable both within a single application and by other applications in the same
+domain" (§2.2). For a storefront that means a grid of cart lines, a promo rule, a store adapter or a
+payment call, not just the business entities (cart, order) a domain model would hold. The layer
+"contains abstractions that can be composed into applications. These are typically building blocks
+for I/O, data transformations, and persistent state, but many other types of abstractions are
+possible" (§2.2).
+
+**Kinds of domain abstraction differ by their ports, not by layer.** Spray doesn't give UI its own
+layer, and he doesn't split a user story into UI, logic and data tiers: "we don't separate UI from
+business logic and data models as we do in conventional architectural layering patterns. These are
+highly cohesive things from the perspective of user stories and ought to be kept together. Instead,
+we separate the implementations of the domain abstractions" (Summary). What makes an abstraction a
+UI abstraction is that it has ports of UI paradigms:
+
+- **A UI-layout port.** "The display class could have a second port of type UI… A wiring of UI ports
+  means one part of the UI is displayed within another part. For example, an instance of display
+  could be put inside an instance of a panel" (Summary). UI layout is "containing one UI element
+  inside another", composed like any other paradigm (§3.5.1). Because a port's type is a paradigm
+  (R9), a UI-layout port connects only to another UI abstraction: a container and what it contains.
+- **Dataflow inputs for what it shows.** The Grid in Spray's CSV example "is able to pull rows of data
+  as needed" from the reader, filter and sort it is wired to (Summary).
+- **Event outputs, and inputs.** "It is common these days for GUI elements such as buttons, menu items,
+  etc to have event-driven output ports… In ALA you create input ports as well. For example all popup
+  window abstractions such as file browsers, wizards, settings, navigable pages, etc have input ports"
+  (§3.5.1).
+
+**Data sources and sinks are abstractions of their own.** "Once you have designed some UI, you will
+then want to connect the UI elements that display data to some data sources. These data source are
+candidates for abstractions. For example, a data source that represents a disk file can be an
+abstraction that handles a disk file format" (§5.2.2). The same holds for where data goes (a store,
+a payment gateway), the "building blocks for I/O… and persistent state" of §2.2. So data is *wired
+into* a UI abstraction, and its events are wired out; a UI abstraction doesn't fetch, persist or run
+the product's rules itself. *This checklist's reading:* Spray states the separation; "doesn't fetch
+or persist" is its consequence under R6 (one concept per abstraction).
+
+**Other kinds** are named the same way, by what they do and the paradigms of their ports: data
+transformations (a filter, a low-pass filter), state (a cart's lines, an undo offer), rules (a promo
+code check), I/O (a store, a gateway). In this checklist's LiveView variants, what the code calls a
+*feature* (a cart, a wishlist) is a state-and-rules domain abstraction with dataflow and event ports
+and no markup. Spray's *features* are something else: compositions of domain abstractions, one per
+user story, in their own layer once the application gets too big (§2.2). "When the wiring outgrows
+one page" covers both. "LiveView
+pieces as abstractions" under the application-layer section maps these kinds onto pages, components,
+LiveComponents, HEEx and handlers.
+
 ## The rules (each is a visible shape)
 
 - **R1 — every edge between abstractions drops to a lower layer.** Give every function a layer
@@ -591,7 +641,10 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
       without abstraction"; `fn` or `&` at the composition says it's wiring (§6.1, §1.6.3).
   - **What doesn't meet it.** `Utils`, `Helpers`, or `Manager` modules; a function that renames a
     primitive (`add(a, b), do: a + b`); names that teach nothing (`process2`, `handle_stuff`); a
-    parameter carried down unread (the "should" above).
+    parameter carried down unread (the "should" above). A UI component that does I/O: a
+    LiveComponent that loads, saves or charges through a store, gateway or placement instance
+    bundles a data source or sink into a UI abstraction (Spray wires data sources to UI elements,
+    §5.2.2). V41 and V41-max were rescored for it (−2, structural).
   - *Spray:* §1.6.3 ("func1 is not an abstraction"); §2.1.1 (an abstraction must be "learnable as a
     concept"; document concept, ports, configuration, example); §7.2.5 ("a good abstraction
     separates the knowledge of different worlds"); Summary and §3.4 (a good abstraction is one where
@@ -655,12 +708,13 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     - *Mind both size bounds, and the port count.* 100 to 500 lines per abstraction; averaging under 100
       means "more abstractions than we need" (Summary). "Abstractness decreases with more ports"
       (§7.2.3), so a module with a long list of inputs is probably too specific.
-    - *Derive a declaration instead of restating it.* A LiveComponent panel lands some of its
-      feature's outputs itself and announces the rest. Declaring only the landed ones and deriving
-      the announced list from the feature's `ports/0` means the two can't drift (V41-max).
+    - *Derive a declaration instead of restating it.* A LiveComponent panel wires some of its
+      feature's outputs itself and sends the rest to the page as port outputs. Declaring only the
+      ones it wires and deriving the sent list from the feature's `ports/0` means the two can't
+      drift (V41-max).
       ```elixir
-      @lands_only [:rows, :changed]
-      def announces, do: Keyword.keys(Cart.ports().out) -- @lands_only
+      @wired_here [:rows]
+      def sent_port_outputs, do: Keyword.keys(Cart.ports().out) -- @wired_here
       ```
   - **What doesn't meet it.** A module that only forwards to another; a manifest or codegen step
     for a page with two features and one reaction (V35's lesson: declare in a manifest once the wiring
@@ -691,14 +745,14 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
       def handle(:checkout, _args, page),        do: Checkout.start(page)
       ```
     - *Wire with clauses, one per port.* V38-max's pages run each feature step through a small
-      runner that folds every output into the page's own `land/3`; the clauses, one per declared port
+      runner that folds every output into the page's own `wire/3`; the clauses, one per declared port
       and contiguous, are the wiring. No catch-all, so a missing wire crashes; a test parses the page
       source, collects the clause heads, and checks them against every feature's `ports/0` both ways.
       It needs nothing beyond Elixir; the cost is that only a source reader, not a value, shows the
       wiring.
       ```elixir
-      defp land(s, :cart, {:summary, summary}), do: assign(s, :summary, summary)
-      defp land(s, :cart, {:checkout_requested, order}), do: run(s, :checkout, &Checkout.pay(&1, order))
+      defp wire(s, :cart, {:summary, summary}), do: assign(s, :summary, summary)
+      defp wire(s, :cart, {:checkout_requested, order}), do: run(s, :checkout, &Checkout.pay(&1, order))
       ```
     - *Keep the composition inspectable.* A graph value (named instances plus a wire list) can be
       printed, diffed, and drawn; nested closures can't (§3.11.3, §6.2.1). Keeping "create an
@@ -714,16 +768,16 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
         {:undo, :restored} => [pass: {Cart.Panel, "cart", :receive}, flash: {:info, "Item restored"}],
         {:checkout, :step} => [patch: @step_paths]
       }
-      def handle_info({_, _, _} = announcement, socket),
-        do: {:noreply, Instance.route(socket, @routes, announcement)}
+      def handle_info({_, _, _} = port_output, socket),
+        do: {:noreply, Instance.route(socket, @routes, port_output)}
       ```
     - *Run clause wiring with a tiny runner.* The clause-wiring technique above needs one generic
       function in the paradigm layer that runs a feature step, stores the new state, and folds each
-      output through the page's `land/3` (V38-max's `Steps`: `run`, `feed`, `stream_change`, `patch`, and a named timer, 56 lines).
+      output through the page's `wire/3` (V38-max's `Steps`: `run`, `feed`, `stream_change`, `patch`, and a named timer, 56 lines).
       ```elixir
-      def run(socket, key, step, land) do
+      def run(socket, key, step, wire) do
         {state, outputs} = step.(socket.assigns[key])
-        Enum.reduce(outputs, assign(socket, key, state), &land.(&2, key, &1))
+        Enum.reduce(outputs, assign(socket, key, state), &wire.(&2, key, &1))
       end
       ```
     - *Test that every port is wired.* Each wiring form needs a coverage test, because an unwired
@@ -736,9 +790,9 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
       for {key, feature} <- page.features(), port <- Keyword.keys(feature.ports().out),
           do: assert({key, port} in Map.keys(page.bindings(1)) ++ page.grounded())
 
-      # V38-max: collect land/3 clause heads from the page source
+      # V38-max: collect wire/3 clause heads from the page source
       Macro.prewalk(Code.string_to_quoted!(File.read!(@source)), [], fn
-        {:defp, _, [{:land, _, [_, key, {port, _}]} | _]} = n, acc -> {n, [{key, port} | acc]}
+        {:defp, _, [{:wire, _, [_, key, {port, _}]} | _]} = n, acc -> {n, [{key, port} | acc]}
         n, acc -> {n, acc}
       end)
       ```
@@ -748,8 +802,8 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
       ```elixir
       instances: %{add_line: %AddLine{carts: Carts, products: Products, cart_id: cart_id}, charge: %Charge{...}}
 
-      defp land(s, :wishlist, {:taken, product}),
-        do: Steps.feed(s, :cart, &Cart.receive/2, {:add_line, &AddLine.run/2}, product, &land/3)
+      defp wire(s, :wishlist, {:taken, product}),
+        do: Steps.feed(s, :cart, &Cart.receive/2, {:add_line, &AddLine.run/2}, product, &wire/3)
       ```
     - *Make the coverage check one line, or a compile error.* A paradigm-layer `Wiring.gaps/1` reads
       a page's source from its compile info and compares its clause heads with every port its
@@ -758,10 +812,77 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
       ```elixir
       assert Wiring.gaps(GoodDealWeb.CartLive.Show) == %{unwired: [], unknown: []}
       # opt in: `use GoodDealWeb.Paradigms.Wiring` fails the build with
-      # "land/3 wiring gaps in GoodDealWeb.CartLive.Show: %{unknown: [], unwired: [ui: :tab]}"
+      # "wire/3 wiring gaps in GoodDealWeb.CartLive.Show: %{unknown: [], unwired: [ui: :tab]}"
       ```
+    - *Bind every port in one map, run by a binder.* Each page has one map from `{feature, port}` to a
+      list of bindings, and a generic `Binder` in the paradigm layer applies each kind (stream,
+      assign, call, input, via, flash, …; thirteen kinds in V39). V39-max adds a `{:via, instance, …}`
+      kind over a paradigm protocol, `Ports.Call`, which the configured store-work instances implement,
+      so a binding names the instance instead of wrapping it in a function, and a test checks every
+      declared port is bound or listed in `grounded/0`.
+      ```elixir
+      {:cart, :removed} => [{:input, :undo, &Undo.capture/2}],
+      {:wishlist, :taken} => [{:via, %AddLine{carts: Carts, products: Products, cart_id: id}, [{:input, :cart, &Cart.receive/2}]}]
+      defprotocol ZeroCoupled.Ports.Call do def call(instance, payload) end
+      ```
+    - *Run the page as a circuit of instances and wires.* The page builds a value of named instances
+      (features, transforms, sinks such as an assign or a flash) and a wire list, and a generic runner
+      delivers outputs along the wires (V40). V42 types every port and checks each wire and unused
+      output when the page mounts, and draws the diagram from the value that runs.
+      ```elixir
+      circuit |> Circuit.wire({:order, :removed}, {:undo, :capture}) |> Circuit.wire({:order, :summary}, {:summary, :value})
+      ```
+    - *Send port outputs from a component to the page.* A feature LiveComponent keeps what it wires
+      to itself (its `@wired_here` ports) and sends the rest to the page as `{name, port, payload}`
+      through a generic `Instance.send_port_output/3`; `sent_port_outputs/0` lists them for the
+      coverage test (V41, V41-max).
+      ```elixir
+      defp wire(s, {:summary, summary} = out), do: s |> assign(summary: summary) |> Instance.send_port_output(:cart, out)
+      ```
+    - *Give a route table a few kinds of target.* V41-max's `Instance.route/3` applies `pass` (to
+      another instance's input by `send_update`), `assign`, `flash`, `flash_by`, `patch`, `call` (a
+      store function or a named instance), `feed` (ask a named instance, pass the answer on), `async`
+      (run a named instance in `start_async`) and `redirect`. The named instances sit in one
+      `instances` map built at mount, as in V45.
+      ```elixir
+      {:wishlist, :taken} => [feed: {:add_line, &AddLine.run/2, {Cart.Panel, "cart", :receive}}, flash: {:info, "Added to cart"}],
+      {:checkout, :ready_to_pay} => [async: {:payment, :payment, &StartPayment.call/2}]
+      ```
+    - *Type every port, and check the whole composition before it runs.* Each port declares a type; a
+      `Call` instance declares the payload types it accepts and what each answers (`AddLine`:
+      `product → item`); a plain function's answer type is written in its binding; sinks have types
+      (a stream takes `:row_change`, a form `:changeset`). `Binder.mount/2` refuses a wire between two
+      types, an output neither bound nor grounded, an unbound input, or an anonymous function (V47;
+      V42 checked a flat circuit the same way).
+      ```elixir
+      {:via, &Carts.list_items/1, :items, [{:input, :cart, &Cart.load/2}]}
+      # refused at mount: "gappy: lines.summary (summary) → a stream takes row_change, not summary"
+      ```
+    - *Draw the diagram from the value that runs.* `Diagram.mermaid/1` renders a page's stories and
+      links, and `mermaid_story/2` one story's insides, from the composition the page mounts, so the
+      picture can't drift from the code (V47; V42 drew its circuit).
+    - *Fail loudly on an instance the page didn't configure.* V45's runner looks a named instance up
+      with `instance!/2`, which raises `no configured instance :charge` instead of calling `nil`.
+  - **Wiring forms the variants use, side by side** (2026-10-02). Hops are message hops per
+    cross-feature effect; familiarity is 1 to 5.
+
+    | Form | Variants | Where the wiring lives | How it runs | Hops | Coverage check | Familiarity |
+    |---|---|---|---|---:|---|---:|
+    | Manifest plus generated glue | V30, V35 | a data file per page | generated, committed handlers | 0 | `mix zc.gen --check` fails on drift | 3 |
+    | Handler clauses (`handle/3`) | V36 | the page's clauses | a small shell folds outcomes | 0 | none | 5 |
+    | Plain LiveView handlers, logic kept | V38 | the page's callbacks | LiveView | 0 | none | 5 |
+    | Bindings map plus binder | V39, V39-max | one map per page | a generic `Binder` with binding kinds | 0 | V39-max: every port bound or grounded | 4, 3 |
+    | Circuit of instances and wires | V40, V42 | a circuit value per page (V42: a diagram module) | a generic circuit runner | 2 | V42: every wire and unused output at mount | 2 |
+    | Feature LiveComponents plus `handle_info` | V41 | the panels' own wires plus the page's clauses | LiveView, `send_update` | 2 | a test sends every port output | 5 |
+    | Feature LiveComponents plus a route table | V41-max | the panels' `@wired_here` plus one `@routes` map | `Instance.route/3` with nine kinds | 1 | a test sends every port output | 4 |
+    | `wire/3` clauses plus a runner | V38-max, V45, V48 | one clause per port in the page | `Steps` (V45: named `@instances`) | 0 | clause heads read from source (V45: `Wiring.gaps/1`, optional compile-time check) | 4 |
+    | Generic host plus slots (toy, unpublished) | slot-split toy | the page's template and routes | `Paradigms.Hosted` runs any feature | 1 | as V41-max | 3 |
+    | Story clauses | V46 | each story's `wire/4`, `input/4`, `event/4`; the page's `wire/3` between stories | `Story` (nests), `Sinks` | 0 | `Wiring.gaps/1`, `story_gaps/1`, `event_clashes/1` | 3 |
+    | Typed story maps | V47 | each story's bindings map; the page's map of `{:to, story, port}` | `Binder` (nests) | 0 | every port typed; the composition checked at mount; a Mermaid diagram drawn from it | 3 |
+    | Feature LiveComponents plus plain clauses | V49 | the panels' own wires plus one `handle_info` clause per port; store work through `start_async` | LiveView, `send_update` | 1 | clause heads read from source, both ways | 5 |
+
   - **Clauses or a value (settled 2026-10-01).** Wiring written as function clauses in one module
-    (`handle_info` clauses on a page, or one `land/3` clause per port) meets R8: it is one place, which is
+    (`handle_info` clauses on a page, or one `wire/3` clause per port) meets R8: it is one place, which is
     what Spray asks of connections (§3.3.1). A wiring value (a map, a route table, a circuit) is a
     technique, not a requirement: it adds inspection and checking by key, at the cost of vocabulary.
     Elixir adaptation: multi-clause functions are this checklist's reading of a wiring list.
@@ -1029,8 +1150,30 @@ leaving it as background for an earlier rule.
     fine), or Clean Architecture's shared-Entity coupling (business objects that every use case
     reads, bad). A tool can't tell them apart, so a
     shared *feature-tier* struct is a defect (above), and a shared lower-layer aggregate is a prompt
-    for a human. `ala_lint` reflects this split: the feature-tier check is scored; the aggregate check
-    is reported under `--strict` and above and scored by no tier (`--enforce` scores it).
+    for a human. `ala_lint` reflects this split: the feature-tier check is scored, and since
+    2026-10-03 the aggregate check is scored from `--strict` up (see below).
+  - **The aggregate case read strictly (settled 2026-10-03).** Spray says use cases depending on
+    entities "is incompatible with ALA": an identity abstraction "should not be used as the carrier of
+    information between two use cases", and "a particular use case should only know about it's own
+    data" (§6.17.2). Two findings, each a "must" (−1):
+    - *A consumer receives another feature's aggregate.* A feature that takes the whole aggregate as
+      an input, or matches its struct, knows its meaning (`Checkout.pay(c, %Cart{} = cart)`, which
+      used three facts of the cart). Send only what the consumer needs: a dataflow carries "only the
+      data that is needed by the use case" (§6.17.2): `checkout_requested: {cart_id, items}`, with the
+      readiness rule moved to checkout. *V46, V48 and V49 do this.*
+    - *One use case's data in a struct another use case shares.* The storefront's `Cart` carries
+      promo, gift-wrap and shipping state, and the portal's order lines are built on the same struct.
+      Split the storefront's concerns out, so the portal rests on a plain line-items abstraction and
+      the storefront's cart adds its configured rules. *V46–V49 do this:* a `Lines` domain
+      abstraction (plain functions over a list of stored lines: find, add, change a quantity, remove,
+      set stock) under both the cart and the portal's `OrderLines`, which has its own struct and
+      pricing; the cart lost `set_discount/2`, "added for the portal consumer".
+    - *Still allowed:* a lower-layer abstraction many features use through its API without its data
+      carrying any one use case's concerns (a `Money`, a rate table, a configured rule). If the linter
+      flags such a value type, set `checks: %{r10_aggregate: :advisory}` and record why.
+    - *Building an instance isn't reading it.* A feature "creates instances of domain abstractions"
+      (§2.2); a module whose only use of an aggregate is calling its `new` doesn't know its data, and
+      `ala_lint` doesn't count it as a reader.
   - **Elixir techniques, in more detail.**
     - *Give features private structs and share only a key.* V24's isolated capsules, V26's dual
       capsules, and V36's per-feature structs mean two features never hold the same data struct. They
@@ -1045,13 +1188,16 @@ leaving it as background for an earlier rule.
       def projection(%Inventory{count: n}), do: %{in_stock?: n > 0}
       ```
     - *Make both ends one abstraction.* See R5's codec sketch. *Not tried in a variant yet.*
-  - **What doesn't meet it.** `Checkout` pattern-matching on `%Cart{}`; one `Order` struct every
-    feature reads and writes (Clean Architecture's shared entity), unless it is deliberately a
-    lower-layer domain abstraction (the aggregate case above, a judgement).
-  - *Spray:* §3.6.1 (the ground symbol); §3.8 (no data coupling); §4.8.1 (no shared DTOs); §7.8.
+  - **What doesn't meet it.** `Checkout` pattern-matching on `%Cart{}` (every walk before
+    2026-10-03 missed this in the storefront variants, though this line already named it); one `Order`
+    struct every feature reads and writes (Clean Architecture's shared entity); a domain aggregate
+    that carries one use case's data and is shared with another (the strict reading above).
+  - *Spray:* §3.6.1 (the ground symbol); §3.8 (no data coupling); §4.8.1 (no shared DTOs); §6.17.2
+    (use cases depending on entities "is incompatible with ALA"; dataflows carry "only the data that
+    is needed by the use case"); §7.8.
     The identity-key technique is an Elixir and database-backed way to meet it, not Spray's wording.
-- **R11 — the application (top) layer is composition only.** The application instantiates,
-  configures, and connects. It holds *all* app-specific knowledge and *no* app-specific logic: "no
+- **R11 — the composition layers are composition only: the application, and Features when an app
+  has them.** The application instantiates, configures, and connects. It holds *all* app-specific knowledge and *no* app-specific logic: "no
   normal programming language code such as assignments and if statements" (§3.5), and about 3–10%
   of the code (§2.4). Spray's own examples show what that sentence covers and what it doesn't.
   - **Not banned:**
@@ -1068,6 +1214,30 @@ leaving it as background for an earlier rule.
 
     Spray flags his own §1.6.3 thermometer for this: the application "is still doing some logic
     work - the 'for loop' and 'if statement', which we will address soon".
+  - **Features are compositions too (settled 2026-10-02).** When an application outgrows the size
+    limit, Spray adds a Features layer, and "Each feature creates instances of domain abstractions,
+    configures the instances with feature specific details, and connects them together as needed to
+    express the feature or user story" (§2.2). Its UI layout and "the bindings of the UI elements to
+    data" go with it, built from domain UI abstractions (§7.14). So everything this rule says about
+    the application holds for a feature: a branch, a computation or handled data in a Features-layer
+    module is a finding.
+    - *A coded abstraction under the name Features.* A module of state and rules with ports
+      (`Features.Cart`, `Features.Undo`) is a domain abstraction in Spray's terms. Putting it in a
+      namespace or layer called Features misleads a reader who knows Spray's vocabulary: an R8
+      "should", −0.5 on the full walk. Name the layer for what it holds (a state layer above the
+      rules, say) and keep "features" for compositions. *Checklist reading.*
+  - **No contained sub-component (settled 2026-10-02).** "There is no 'hierarchical' or 'nested'
+    structure in ALA… There is no analog of a sub-module or sub-component, no such thing as a
+    sub-abstraction. Abstraction layers replace hierarchical containment" (§2.2). A page-specific
+    LiveComponent (the generated `FormComponent`, V40's and V42's circuit panels) has its own state,
+    lifecycle and event handlers, is used only inside one page, and talks to it by message: a
+    sub-component the page contains. It's a "must" finding, −1 for one and −2 (structural) for
+    several. Spray's provision for app-specific UI is layout and bindings, built from domain UI
+    abstractions: "Using one in a specific application only requires a label and a binding to an
+    action" (§7.14). So the page composes its form from a generic domain UI abstraction it configures
+    and wires, and a component that would read the same in another app moves down a layer as a
+    domain UI abstraction. *This replaces the 2026-10-01 reading that page-specific LiveComponents
+    are part of the application and may wire.*
   - **Where each kind of `if` goes.** These are Spray's moves, in order of how often they come up:
     1. *Propagation guards* ("only if there's a value", "stop on error") move into the connection
        mechanism. He factors the `if`s "into the Compose function" (Bind, the function that chains
@@ -1153,12 +1323,13 @@ leaving it as background for an earlier rule.
       page as a circuit of instances and wires (V40), or make each feature a LiveComponent instance
       that lands its own outputs and announces the rest (V41). V41 reaches zero R11 findings. V39 and
       V40 keep store work in page helpers (below). Their costs are under "How close a LiveView page
-      can get". The max variants reach 100 on the full walk three ways: V41-max (V41 plus one route
-      table per page), V39-max (V39 with store work behind a `Call` port and no composed inputs), and
-      V38-max (plain clauses, one per port).
+      can get". The max variants get close on the full walk three ways: V39-max (V39 with store work
+      behind a `Call` port and no composed inputs) and V38-max and V45 (plain clauses, one per port)
+      reach 100, and so does V41-max (V41 plus one route table per page) once its panels' I/O is
+      wired at the page.
     - *Make mount an event on the diagram.* Loading in `mount/3` hands a store's result to a
       feature. V39-max delivers `{:page, :mounted}` through its bindings, where it is bound to
-      `{:via, &Carts.list_items/1, [{:input, :cart, &Cart.load/2}]}`. V38-max does the same through its runner, `Steps.feed(:cart, &Cart.load/2, &Carts.list_items/1, cart_id, &land/3)`. A first version of V38-max configured the Cart
+      `{:via, &Carts.list_items/1, [{:input, :cart, &Cart.load/2}]}`. V38-max does the same through its runner, `Steps.feed(:cart, &Cart.load/2, &Carts.list_items/1, cart_id, &wire/3)`. A first version of V38-max configured the Cart
       feature with its store, so `Cart.load/2` reads it; V41's panels load themselves.
     - *Replace a composed input with an output.* A handler that reads assigns to build another
       feature's input (V39's `pay` fetching stock, `toggle_wishlist` finding the line) becomes one
@@ -1167,7 +1338,7 @@ leaving it as background for an earlier rule.
     - *Route every announcement explicitly, and test that you do.* A page's multi-clause
       `handle_info` is its wiring. With a catch-all clause, an announcement nobody routes disappears
       silently. Without one, it crashes the page, and a test can send every port each instance
-      declares it announces (`announces/0`) and fail on a missing clause (V41's 2026-09-30
+      declares it announces (`sent_port_outputs/0`) and fail on a missing clause (V41's 2026-09-30
       revision). The trade: the page must also ignore, explicitly, every broadcast on a shared topic
       it doesn't use, and a new fact on that topic crashes subscribed pages until they get a clause.
       Explicit is safer where the test suite runs on every change; the catch-all is the more
@@ -1208,6 +1379,20 @@ leaving it as background for an earlier rule.
       Cart.new(cart_id: cart_id, store: Carts, shipping: Shipping.new(...), ...)
       def load(cart, _), do: (cart = %{cart | items: cart.store.list_items(cart.cart_id)}; {cart, [rows: {:reset, rows(cart)}]})
       ```
+    - *Build a page's form from a generic record form.* A domain UI abstraction takes the fields,
+      the words and a changeset as attributes, emits `validate` and `submit` with the params, and
+      shows the errors it's given. The page wires `submit` to a save instance and its two outcomes to
+      a flash and patch or back to the form's errors. Nothing page-specific has its own state or
+      handlers. *Proposed 2026-10-02; built in V46 and V47 (`record_form` plus a `RecordEdit` state).*
+      ```heex
+      <.record_form id="product" form={@form} fields={@product_fields} t={@texts.form}
+                    on_validate="validate_product" on_submit="save_product" />
+      ```
+      ```elixir
+      # sketch: the save instance has two output ports, and the page wires both
+      defp wire(s, :save_product, {:saved, _product}), do: s |> put_flash(:info, @texts.saved) |> push_patch(to: ~p"/products")
+      defp wire(s, :save_product, {:invalid, changeset}), do: assign(s, :form, to_form(changeset))
+      ```
     - *Add the foundation function that removes a hand-off.* `Products.get!(id) |>
       Products.delete()` in a handler is the page passing one store result into another call. A
       store function that does both (`Products.delete_by_id/1`) keeps the handler to one call.
@@ -1225,6 +1410,10 @@ leaving it as background for an earlier rule.
     - Loading rows in `mount/3` and handing them to a feature (`Cart.new(items: Store.all(...))`).
     - A `for` or a compound `:if` in the page's template, including a comparison like
       `disabled={@item_count == 0}`.
+    - A page-specific LiveComponent (`FormComponent`, a page's own panels): a contained
+      sub-component, whatever it calls.
+    - A module in a Features layer that holds logic, or a coded abstraction in a namespace called
+      Features (R8).
   - **Limits.** Some forms stay in any LiveView page because the framework or the language puts them
     there: routing by event name and URL, decoding browser params, storing the program value back, a
     lookup from URL to step, and a JavaScript hook or two. None is logic. "How close a LiveView page
@@ -1753,27 +1942,92 @@ the application wires. So calls between the application's own functions are inte
 abstraction, not peer edges (R1). The one caution is R1's working-chain clause: product functions
 doing work and calling each other.
 
-**Where each LiveView piece belongs.** A LiveView page is not a stack of application sub-layers
-(shell → page → view). Only the page-specific parts are application:
+**LiveView pieces as abstractions.** A LiveView page is not a stack of application sub-layers
+(shell → page → view). Each piece is either the application, a domain abstraction of one of the kinds
+above (UI, feature, data source or sink), or a paradigm. Spray's UI abstraction (see "What a domain
+abstraction is") sets what the UI pieces may do: render what's wired in, emit events, contain other
+UI. *This mapping is the checklist's Elixir reading.*
 
-| Piece | Layer | Why |
+| Piece | What it is | What it may do |
 |---|---|---|
-| The page's LiveView module (`mount/3`, `handle_event/3`, `handle_info/2`, `render/1`) | Application | it knows this page's requirements and wires everything else |
-| The page's HEEx template | Application | the UI half of the diagram: nesting is the "display inside" wiring |
+| The page's LiveView module (`mount/3`, callbacks, `render/1`) | Application | instantiate and configure, wire, hold application literals; no computing, deciding, fetching or persisting of its own (R11) |
+| The page's HEEx template | Application: the UI-layout wiring | contain UI abstractions in each other (the UI-layout paradigm), wire data into them through attributes and slot values, name the events they emit |
+| `handle_event/3`, `handle_info/2`, `handle_async/3` clauses | Application: wires | route an emitted event, a message or an async result to one input, decoding params at the edge; clauses in one module are one place (R8) |
 | The router | Application | it composes pages |
-| Page-specific components used only here, which know the product | inside the page (Application), or a Feature if it has its own state and ports | part of the page's wiring, or a feature the page wires |
-| Feature modules, feature LiveComponents | Features | product-knowing, and wired by the page |
-| Generic function components (`core_components.ex`, `<.button>`, `<.table>`) | Domain Abstractions (UI) | product-free, reusable, configured by attrs and slots |
-| A generic shell, effect interpreter, or runner (V35/V36's `EffectInterpreter`, a `use PageShell` dispatcher) | Programming Paradigms | an execution model: it knows how a kind of connection runs, not what this page does (Spray keeps "Execution models.doc" in this layer) |
+| A function component (`<.cart_item_row>`, `<.tabs>`, core components) | UI domain abstraction | render data passed in as attributes; emit events whose names it's given; contain children through slots (its UI-layout port); no state, no I/O |
+| A LiveComponent that is a UI widget (a menu, a date picker, an autocomplete) | UI domain abstraction with internal state | keep the state of its own interaction (open or closed, the text typed so far); emit events; never fetch, persist or apply the product's rules |
+| A LiveComponent that holds a feature's value | a host | fine when it's generic (a paradigm that runs any feature, renders only what the page passes in through slots, and announces outputs); a bundle when it also renders its own markup and does I/O, which is an R6 finding (V41's and V41-max's panels) |
+| A page-specific LiveComponent (`FormComponent`, V40's circuit panels) | a contained sub-component | nothing: it's an R11 finding (§2.2). Use a generic domain UI abstraction the page configures and wires, or move a reusable one down a layer |
+| Feature modules (`Features.Cart`, `Features.Undo`) | state-and-rules abstractions, in a layer the variants call Features (in Spray's terms, stateful domain abstractions; his features are compositions, see "When the wiring outgrows one page") | `{state, outputs}` steps with declared ports; no markup, no events by name, no I/O unless I/O is the concept |
+| Store, gateway and placement instances (`AddLine`, `PlaceOrder`, `Charge`, a store module passed as configuration) | data source and sink abstractions | do the I/O they're configured for; wired by the page into a feature's inputs or from its outputs |
+| A domain UI component configured with a rule (`StockIndicator`) | UI domain abstraction | render passed-in data using a configured rule instance |
+| A generic shell, effect interpreter, runner or host (`EffectInterpreter`, `Binder`, `Steps`, a generic host LiveComponent) | Programming Paradigms | an execution model: it knows how a kind of connection runs, not what this page does (Spray keeps "Execution models.doc" in this layer) |
 | `Phoenix.LiveView`, `Phoenix.Component` | Programming Paradigms / Foundation, library-provided | LiveView's event → state → render loop is an execution model; a page implementing its callbacks is configuring a more general module (R9) |
+
+What follows from the table:
+- **Data is wired into UI, never fetched by it.** A component or LiveComponent that calls a store, a
+  repo or a context to get its rows, or to save a change, is a UI abstraction with a data source or
+  sink inside it. Pass the rows in as attributes or slot values, and wire its change events to a
+  store instance at the page (§5.2.2, R6).
+- **Interaction state is a UI abstraction's own business.** A LiveComponent may hold what it needs for
+  its own interactivity (which tab is open, a draft value) without that being a finding. The line is
+  crossed when it holds the product's state (a cart's lines) together with markup and I/O.
+- **A feature in a LiveComponent needs a generic host, or its markup and I/O taken out.** The slot
+  split (`toy-slot-split`) shows one way: a generic host runs the feature, the page passes UI
+  abstractions in through slots, and the page wires `changed` to the store. Holding features as values
+  in the page (V39-max, V38-max, V45) is the other way, and needs no host at all.
+
+**LiveView features against the rules.** How each feature's use meets a rule or misses it, with
+what the variants settled when they were rescored (2026-10-01). *The checklist's Elixir reading
+throughout.*
+
+| LiveView feature | Meets the rule when | Misses it when | Rule |
+|---|---|---|---|
+| `mount/3` | it configures instances and assigns their starting values; a read happens through a runner or a pull port (`Steps.feed`, `source={&Carts.list_items/1}`) | it reads a store and hands the rows to a feature or component | R11 |
+| `handle_event/3`, `handle_info/2`, `handle_async/3` clauses | each clause forwards one event, message or async result to one input, decoding params at the edge; all clauses sit in one module | a clause computes, decides, or builds one feature's input from another's state or from assigns | R11, R8 |
+| `handle_params/3` | it looks the step up in a page-owned table and passes it to the feature that decides | it encodes which steps may follow which | R11 |
+| Assigns | they are the landing points of outputs and the page's configuration | the page derives values in them (`assign(:total, Enum.sum(...))`) | R11 |
+| HEEx in the page | it places UI abstractions, passes data in through attributes and slots, names events; `:if` on one boolean, field reads | a comparison, arithmetic, `case`, `:for`, or a call into a lower module (use `pane`, `only_on`, `none`, `stream_list`, or a row that carries the boolean) | R11 |
+| Streams | a feature's `rows` output lands as `stream_insert`/`stream_delete`; a generic `stream_list` iterates | the page iterates them with `:for` | R11 |
+| Function components | they render passed-in data, take their words from the page, emit events they're given names for | they hold words, fetch, persist, or decide product rules | R3, R6 |
+| Slots and `:let` | the page passes markup into a container or host (the UI-layout port) | no common misuse | R6, R8 |
+| LiveComponent state | it is the component's own interaction state (open, draft, selected), or a feature value the component renders | it is the product's state together with I/O (V41's panels) | R6 |
+| LiveComponent data | data comes in as attributes, slot values, or a pull port (a read function the page passes) | it calls a store or repo by name, or requires a store module's API (`store.list_items`, `store.apply_change`): the component owns the interface it needs | R6, R9 |
+| LiveComponent changes | a change goes out as a port output (`send_port_output`) or an event, and the page wires it to the store | the component saves it itself | R6 |
+| `send_update/2` | the page passes an output to another instance's input (a wire) | an instance sends to a sibling it names | R1, R2 |
+| `send(self(), ...)` from a component | it sends a port output to the page that placed it, under the name the page gave it (`name={:cart}`) | it targets a specific peer, or names itself in its own code so the page must match a literal (V41, V41-max) | R9, R5 |
+| `start_async/3` | the page (or a generic host) runs a configured I/O instance and routes the outcome back to the feature | a feature component makes the gateway call itself | R6, R11 |
+| Timers (`Process.send_after`) | a paradigm or the page starts one on a feature's fact (`captured`) and routes the tick to an input | a feature component keeps a clock as part of the product logic | R9, R11 |
+| PubSub | an `on_mount` hook subscribes; `handle_info` routes the fact to an input | a module subscribes itself to a topic it names | R1, R5 |
+| `push_patch`, `push_navigate`, `redirect` | the page patches on a feature's `step` through its path table, or redirects to a URL an output carries | a component patches, or a feature names a path | R3, R9 |
+| Forms and changesets | a feature or domain module validates; the page supplies the messages; the form posts events to the page or host | validation messages live in the feature; the page validates | R3, R11 |
+| JS commands and hooks | `JS.navigate`, `phx-hook` named in the template | a hook carries product rules | R3 |
+| Page-specific LiveComponents (`FormComponent`, a page's own panels) | never: a page composes its UI from domain UI abstractions it configures (a generic record form), and its function components hold only markup | a LiveComponent with its own state and handlers is used only inside one page: a contained sub-component (§2.2) | R11 |
+
+Four settled readings behind the table:
+- **Clauses in one module meet R8.** Multi-clause handlers and `wire/3` clauses on one page are one
+  place; a route table or bindings map is a technique, not a requirement.
+- **A UI component that does I/O is an R6 bundle.** A LiveComponent that loads, saves or charges
+  through a store, gateway or placement instance is a UI abstraction with a data source or sink
+  inside it (V41 and V41-max were rescored for it). The fix keeps the component: data comes in
+  through a pull port or attributes, changes go out as port outputs, and the page wires the store.
+- **A pull port is wiring; a required store module is not.** A read function the page passes
+  (`source={&Carts.list_items/1}`) is Spray's pull dataflow (his Grid "is able to pull rows of data as
+  needed", Summary). Passing a store *module* and calling an API on it makes the component define what
+  it needs from a store: an interface it owns (R9).
+- **A page-specific LiveComponent is a contained sub-component (2026-10-02).** Spray has "no analog of
+  a sub-module or sub-component" (§2.2), and his provision for app-specific UI is layout and bindings
+  built from domain UI abstractions (§7.14). This replaces the earlier reading that a page-specific
+  LiveComponent is part of the application and may wire. See R11.
 
 Two consequences:
 - **A generic shell sits *below* the page, not above it.** When it calls back into the page's
   callbacks, that's the passed-in callback case (R1, R9), not an upward edge. A page that uses the
   shell is dropping.
 - **Generic view components aren't application code** even when only one page uses them so far.
-  If a component would read the same in another product, it's a domain UI abstraction. A component
-  that knows this page's data or events is part of the page.
+  If a component would read the same in another product, it's a domain UI abstraction. A function
+  component that knows this page's data or events is part of the page, as markup. A LiveComponent of
+  that kind, with its own state and handlers, is a contained sub-component (R11).
 
 **Getting the application right in a LiveView app.** This is where most of an Elixir app's ALA
 quality is won or lost, because the page is the one place that is allowed to know everything.
@@ -1800,7 +2054,9 @@ Each point states a property first; what follows it is one way to get there.
 - **Features are wired by the page, not by each other.** Feature modules and feature
   LiveComponents are Features-layer instances. The page gives each one its inputs and routes its
   outputs (§7.15; R1, R5). A feature LiveComponent that reaches for a sibling's state
-  or a named topic breaks R1 or R10.
+  or a named topic breaks R1 or R10. A feature LiveComponent that also renders its own markup and loads
+  or saves through a store bundles a feature, a UI abstraction and a data sink: R6 (see "LiveView
+  pieces as abstractions").
 - **Subscriptions and timers are set up by the page.** `mount/3` subscribes and routes messages to
   features, or passes a topic down as configuration (R1, §4.4.2).
 - **Generated glue is application code.** If a manifest or diagram generates the page's wiring, the
@@ -1865,6 +2121,88 @@ normal *inside* it.
   `ComponentPurity`, partially cover this; a human
   running the checklist must **read the templates** — this is the single biggest thing the linter
   cannot see and the human necessarily can.
+
+### When the wiring outgrows one page: Features as compositions
+
+Spray's answer to a large application is a layer, not a file split. "If a single abstraction is used
+for the application, then as more and more user stories are added into it, it will eventually get too
+large for the ALA size constraint… it is the application that will go over the 500 line complexity
+limit. ALA will need to be applied to the large application abstraction by adding a new layer below
+it" (§2.2). The application then "just composes a set of features or user stories needed in that
+specific application, and sets up any communication that may be needed between them" (§2.2).
+
+A Spray feature holds wiring, the same as the application does: "Each feature creates instances of
+domain abstractions, configures the instances with feature specific details, and connects them
+together as needed to express the feature or user story", and "Feature abstractions can have ports"
+(§2.2). Its UI goes with it. The layout and "the bindings of the UI elements to data" are "kept
+together, encapsulated inside a feature. Instead, the UI is composed from Domain UI abstractions"
+(§7.14). Features are "the natural abstractions in the requirements" (§7.15).
+
+What follows for partitioning a large app:
+- **Split along features, not along files.** Splitting one page's wiring across several files with no
+  concept per file leaves one abstraction spread over several files. The size limit still applies to
+  the whole, and a link from one file to another is a symbolic connection: "as a program grows, these
+  symbolic wirings are always hard to follow. You would need to resort to text searches" (§1.6.3).
+  A feature is a part a reader can name and read alone. *Checklist reading.*
+- **Many crossing links mean a wrong cut or a missing abstraction.** In conventional code "the
+  cohesion of the inherent graph for given user story is lost as hundreds of symbolic connection
+  buried in your code" (§3.6). A cut along user stories keeps most wires inside a feature. If a cut
+  can't, either the features are drawn wrong, or a thing many of them connect to belongs a layer
+  down, which is the ground-symbol smell (§3.6.1).
+- **In LiveView each live route is already a partition.** The router composes pages, and pages
+  reach each other only through URLs, PubSub and the store. *Checklist reading:* the router acts
+  as the application, each page is a feature-sized application of its own, and what has to scale is
+  one page's wiring. A PubSub topic between pages is a symbolic connection (§4.7.4). Keep its
+  subscribe and publish behind one module, as the variants' `Broadcast` does.
+
+What the variants have (measured 2026-10-02):
+- **Their "features" are not Spray's features.** `Features.Undo`, `Features.Cart` and the rest are
+  coded state abstractions with ports: `{state, outputs}` steps with logic inside. Spray's features
+  contain only instances, configuration and wiring. In his terms these modules are stateful domain
+  abstractions. `Undo` would serve any app in the domain, and `Cart` is a storefront's cart. The
+  edges are the same either way, so R1 doesn't change, but the name misleads a reader who knows
+  Spray's vocabulary: since 2026-10-02 it's an R8 "should" (−0.5), and `ala_lint` treats a layer
+  named for features as a composition layer (see R11). *Checklist reading.*
+- **Until V46 and V47, no variant had Spray's Features layer.** Each page was the whole composition
+  for its route. V45's cart page is 484 lines with its template, at the 500-line limit where Spray
+  adds the layer; V46's is 270, with the stories holding the rest.
+- **Few links cross between features, and they meet at a hub.** Of the V45 cart page's 29 `wire/3`
+  clauses, 9 connect one feature to another, and every one of them touches the cart (`removed` to
+  undo, `restored`, `moved` and `taken` back to the cart, and so on). In the portal it's 5 of 15,
+  each touching the order. The rest wire a feature to the page's own landing points: assigns,
+  streams, flashes, timers and store instances. Cut by user story (edit the cart, undo a removal,
+  save for later, the wishlist, checkout), the page would wire 9 links between stories.
+
+Techniques for a page that outgrows the limit (V46 and V47, 2026-10-02):
+- **A story module.** A Features-layer module for one user story: it instantiates and configures that
+  story's domain abstractions, holds its wires, renders its layout from domain UI abstractions, and
+  declares ports for the few links that leave it. The page composes stories and wires their ports.
+  V46 and V47 split both pages into the same eight stories; `UndoRemoval` serves both pages, each
+  configuring its own window.
+  ```elixir
+  # V46: a story's inner wiring, one clause per part port; send_out leaves the story
+  def wire(s, me, :undo, {:restored, item}),
+    do: s |> Sinks.stop_timer(:undo) |> Story.show(me, :pending, false) |> Story.send_out(me, :restored, item)
+  # the page wires stories
+  defp wire(s, :edit_cart, {:removed, item}), do: Story.input(s, :undo, :capture, item)
+  ```
+- **Nested wiring, not merged wiring.** Each story holds its own wiring and the page holds only the
+  links between stories, so nothing has to be merged or delegated: V46 with `wire/4` clauses per story
+  and `wire/3` on the page, V47 with a bindings map per story and the page's map of
+  `{:to, story, port}` links. (Merging per-story route tables, V41-max's form, or delegating V45-style
+  clauses would also work; not tried.)
+- **A runner that nests.** A story is itself an instance with ports. V46's `Story` and V47's `Binder`
+  run a story's part, follow its own wiring, and hand what it sends out to the page. A story's timer
+  and async task report to its own input ports, so the page has one generic clause for each and knows
+  no timer or task name.
+- **Surfacing hidden links.** The cart page's cut gave 12 links between stories, not the 9 measured
+  on V45: three were hidden in shared page assigns (`@summary`, `@wishlist_ids`) and in an event the
+  checkout's view sent to the cart. A story owns its view, so each became an explicit wire.
+
+Many paradigms and specialized ports are the norm in Spray's projects, not an extra: "we will for the
+first time use multiple programming paradigms, a usual thing in real ALA projects" (§7.14). Each one
+is also something a team has to learn, which is the familiarity cost this checklist's LiveView
+variants keep paying.
 
 ### How close a LiveView page can get
 
@@ -1944,7 +2282,7 @@ component raises, so the cart's instances stay mounted and hidden behind the che
 
 **R11 findings by variant** (`ala_lint --super-strict`; the 2026-09-30 linter counts `for` loops and
 nested hand-offs, and doesn't count routing clauses, `with`, ok/error routing, or the `connected?` guard;
-the 2026-10-01 linter also reads HEEx templates):
+the 2026-10-01 linter also reads HEEx templates, run with layer maps that place every module):
 
 | Variant | R11 findings, 2026-09-30 | 2026-10-01 (templates read) | What's left in the top layer |
 |---|---:|---:|---|
@@ -1953,12 +2291,14 @@ the 2026-10-01 linter also reads HEEx templates):
 | coffee maker | 4 | 14 | its user stories still branch in the composition, the step the thermometer takes at §1.6.4; its template computes too |
 | V36 | 4 | 4 | a plain composition that branches in a few places and hands the cart's result to checkout |
 | V38 | 8 | 82 | branching handlers, handled data and template logic, kept on purpose (its charter was to evolve a conventional app without adding indirection); built out to the full requirements on 2026-10-01, with 39% of application functions holding logic |
-| V35 | 6 | 46 | URL and sequencing branches from V33's flows, two hand-offs from the product store into the cart, and logic in its views' markup |
-| V39 | 4 | 27 | the order-placement loop and line lookup in page helpers, a handler passing the cart's line to the wishlist, and logic in its views' markup |
-| V40 | 3 | 26 | the same page helpers as V39, and comparisons and loops in its components' markup |
-| V41 | 0 | 8 | tab and step comparisons and a tab loop in the pages' markup; otherwise routing clauses, param decoding, a URL lookup, and `with` |
-| V42 | 0 | 20 | V40's circuit without the page helpers; comparisons and loops in its components' markup |
-| V41-max, V39-max, V38-max, V45 | 0 | 0 | only the forced forms; each also scores 100 on the full hand walk |
+| V35 | 6 | 54 | URL and sequencing branches from V33's flows, two hand-offs from the product store into the cart, and logic in its views' markup |
+| V39 | 4 | 35 | the order-placement loop and line lookup in page helpers, a handler passing the cart's line to the wishlist, and logic in its views' markup |
+| V40 | 3 | 34 | the same page helpers as V39, and comparisons and loops in its components' markup |
+| V41 | 0 | 16 | tab and step comparisons and a tab loop in the pages' markup; otherwise routing clauses, param decoding, a URL lookup, and `with` |
+| V42 | 0 | 28 | V40's circuit without the page helpers; comparisons and loops in its components' markup |
+| V41-max, V39-max, V38-max, V45 | 0 | 0 | only the forced forms; each scored 100 on the full hand walk until the 2026-10-02 stricter readings (99, and 98 for V41-max): the generated `FormComponent` and a `Features` namespace of domain abstractions |
+| V46, V47 | not run (built later) | 0 | only the forced forms; 100 on the full walk under the 2026-10-02 readings, with Spray's Features layer and no contained sub-component |
+| V48, V49 | not run (built later) | 0 | only the forced forms (V49 also keeps its hop); 100 on the full walk at familiarity 4 and 5 |
 
 **What reaching zero costs.** Each design is something a team has to learn and keep, which is why
 R11 stays in the linter's strictest tier.
@@ -1971,19 +2311,21 @@ R11 stays in the linter's strictest tier.
   Cross-feature effects take two message hops, and the design lives in about twenty `handle_info`
   clauses instead of one table. Familiarity 5.
 
-- *V38-max, clauses as wires:* a 56-line runner and one `land/3` clause per port (44 across the cart
+- *V38-max, clauses as wires:* a 56-line runner and one `wire/3` clause per port (44 across the cart
   and portal pages, built out to the full requirements on 2026-10-01), checked by one test per page that
   reads the clause heads. Zero hops. Familiarity 4. At 44 ports the clauses still read as a list.
 - *V45, checked clauses:* V38-max with its store-work instances named in one `@instances` map (no
   clause reads assigns), a one-line coverage test per page (`Wiring.gaps/1`), and an optional
-  compile-time wiring check (`use Wiring`). 100 on the walk, lint 100/100/99, zero hops, about the size of
+  compile-time wiring check (`use Wiring`). 100 on the walk (99 since the 2026-10-02 stricter readings), lint 100/100/99, zero hops, about the size of
   the other full variants. Familiarity 4.
 
 The linter scores the first three within a point of each other (97 under `--strict` on the 2026-09-30 linter; 94 or 95 on the 2026-10-01 one). What separates them
 is what it can't see: readability, hops, and vocabulary.
 
 **Past zero: 100 on the full walk.** Three variants were changed, in copies, until a rule-by-rule hand walk
-found nothing to deduct: V41-max (99.5, its hop), V39-max and V38-max, each at 100. The calls that hold
+found nothing to deduct: V41-max (99.5, its hop), V39-max and V38-max, each at 100. A later walk deducted
+R6 −2 from V41-max (its panels did their own I/O); with loading through a pull port and changes
+routed to the store at the page, it is back to 100. The calls that hold
 those scores up, made the same way in all three: one-line domain rules (a fee, a line total) count as
 concepts though the linter's R6 heuristic flags them; configured rule instances several features receive
 count as configuration, not R10 shared data; report-only numbers (public surface, module size, V38-max's
@@ -2004,11 +2346,30 @@ each), a test that every declared port is wired, and, for components, the hop an
 character (a conventional page that keeps its logic) can't survive 100. Clause wiring was tried at 44 ports
 (V38-max built out, 2026-10-01) and still reads as a list.
 
-**One placement held loosely.** V41's feature panels are LiveComponents placed in the Features layer:
-the page configures and wires each one, and none names the page. But their markup is shaped for this
-page's layout, and a reviewer could fairly call that part application. If that reading wins, split
-each panel into a feature instance that handles events and outputs, and page-owned markup passed in
-through slots. Untried.
+**Stricter readings, 2026-10-02.** Two of Spray's statements were applied strictly and every
+published variant rescored. A page-specific LiveComponent is a contained sub-component (§2.2): −1 for
+the generated `FormComponent` in every storefront variant, −2 (structural) for V40 and V42, whose
+circuit panels are also page-specific LiveComponents. And Spray's features are compositions (§2.2), so
+a `Features` namespace holding coded state abstractions is an R8 "should" (−0.5) wherever a variant
+has one. Full walk: V41-max 98, V39-max, V38-max and V45 99 (98.5), V41 87 (86.5), V38 84, V42 83
+(82.5), V39 81 (80.5), V40 79 (78.5), V35 77 (76.5); coffee 95 and V36 91 unchanged. Lint (strict):
+V40 92, V41 93, V42 94, V35 91 after the same day's linter refinements; the others unchanged. Two new
+variants meet both readings: V46 (V45 with stories) and V47 (V39-max with typed story maps) score 100
+on the walk, lint 100/100/99, and meet 10 of the 10 rules the linter checks, where the max variants and
+V45 meet 9 (R11, the `FormComponent`). Two more show a full score doesn't cost familiarity: V48 (V45 with
+only the two fixes, familiarity 4) and V49 (V41-max without its route table, plain clauses, familiarity
+5, the hop's half point rounding to 100). Building V49 found a silent contract every walk had missed in
+V41 and V41-max: each panel names itself in its own code (`send_port_output(s, :cart, out)`) and the
+page must match the literal (R5, −1; V41 86, V41-max 97). A panel should send under a name the page
+passes it (`name={:cart}`).
+
+**One placement held loosely.** V41's feature panels are LiveComponents in the layer the variants call
+Features: the page configures and wires each one, and none names the page. Under the stricter readings
+they are stateful domain UI abstractions (each takes its words and rules from the page), not contained
+sub-components, so they aren't deducted. A reviewer who reads their markup as shaped for this page
+would split each into a generic host that runs the feature and page-owned markup passed in through
+slots. The unpublished slot-split toy did that for the cart page: it fixes that reading but keeps the
+hop.
 
 **Does stopping short pay?** Mostly, yes. Spray's own history says so: "The turning point was when I
 noticed two (accidental) successes in parts of two projects" (§1.5.1). Those parts had "undergone
@@ -2096,6 +2457,10 @@ decidable. Read each note as "what a human must still judge."
   function is really a connection mechanism whose job is carrying, and whether the lower abstraction
   could be configured or wired from the composition instead. The wrapper heuristic spares a function
   whose first parameter is its own configured struct (a configured rule, not a renamed operator).
+  *Also automatable (2026-10-01):* `ui_io`, a LiveComponent or component module in a feature or domain
+  layer that calls a module reaching a Repo or PubSub, a configured I/O abstraction, or a module held
+  in a variable or assigns. *Human must judge:* whether a passed-in function is a pull port (wiring)
+  or a store hidden behind a function.
 - **R7 (earns its existence).** *Automatable (advisory):* dead code; trivial single-use one-liners;
   abstraction height past a ceiling. These are reported but **not scored by default** — reuse is
   evidence, not a requirement (see "Helper proliferation" above), so the tool never fails code on
@@ -2122,8 +2487,13 @@ decidable. Read each note as "what a human must still judge."
   passed as a non-first argument into a feature or domain function, and a private page helper doing
   store work (two or more bottom-layer calls). The scale caps each kind of finding, so the linter
   also reports `:r11_share`, the percentage of application functions with any R11 finding, and
-  `:hops`, pages that relay between LiveComponents. *Human must judge:* whether a flagged form is
-  one of the forced LiveView departures.
+  `:hops`, pages that relay between LiveComponents. From 2026-10-02 the same checks run on a Features
+  layer (one named `:feature`, `:features`, `:user_story(ies)` or `:story(ies)`, or marked
+  `composition: true`), and `:subcomponent` flags a LiveComponent in a composition layer (scored by
+  `--strict`). The report also counts the checklist rules met (no scored finding in any of a rule's
+  checks), because its score is a density and one finding in a large codebase rounds away. *Human must judge:* whether a flagged form is one of the forced LiveView departures,
+  and whether a layer's name matches what it holds (a coded state layer named for features is the R8
+  mislabel; the linter only sees that it then holds logic).
 
 Two whole-design properties **no single-snapshot linter can check** (they need more than the code):
 **reuse** (does an abstraction wire into two or more consumers unchanged? That needs a second
@@ -2556,7 +2926,7 @@ The checklist's vocabulary, in alphabetical order. Section numbers point to Spra
 
 **Execution model.** The code that makes a kind of connection actually run, such as a runner, an interpreter, or LiveView's event loop. It lives in the Programming Paradigms layer.
 
-**Feature.** A product-knowing abstraction in its own layer under the application, wired by it, used once an application is too big to be one abstraction (§2.2, §7.15).
+**Feature.** A product-knowing abstraction in its own layer under the application, wired by it, used once an application is too big to be one abstraction (§2.2, §7.15). Like the application, it holds instances, configuration and wiring, including its UI layout from domain UI abstractions (§2.2, §7.14). The LiveView variants' `Features` modules are stateful domain abstractions under that name.
 
 **Ground symbol.** Spray's name for a wire that joins many ports, like ground on a schematic. It suggests a missing abstraction one layer down (§3.6.1).
 
