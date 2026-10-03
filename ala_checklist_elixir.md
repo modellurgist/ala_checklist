@@ -860,7 +860,11 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
       ```
     - *Draw the diagram from the value that runs.* `Diagram.mermaid/1` renders a page's stories and
       links, and `mermaid_story/2` one story's insides, from the composition the page mounts, so the
-      picture can't drift from the code (V47; V42 drew its circuit).
+      picture can't drift from the code (V47; V42 drew its circuit). A wiring value draws directly:
+      V39-max's bindings map and V41-max's route table each have a drawer. Wiring written as clauses
+      draws by reading the source: V48's `wire/3` clauses, V46's page and story clauses, and V49's
+      `handle_info`/`handle_async` clauses. Those drawers read clauses by the shape the page writes
+      them in, so a test should check the edges a reader looks for first.
     - *Fail loudly on an instance the page didn't configure.* V45's runner looks a named instance up
       with `instance!/2`, which raises `no configured instance :charge` instead of calling `nil`.
   - **Wiring forms the variants use, side by side** (2026-10-02). Hops are message hops per
