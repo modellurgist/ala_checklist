@@ -884,6 +884,7 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     | Story clauses | V46 | each story's `wire/4`, `input/4`, `event/4`; the page's `wire/3` between stories | `Story` (nests), `Sinks` | 0 | `Wiring.gaps/1`, `story_gaps/1`, `event_clashes/1` | 3 |
     | Typed story maps | V47 | each story's bindings map; the page's map of `{:to, story, port}` | `Binder` (nests) | 0 | every port typed; the composition checked at mount; a Mermaid diagram drawn from it | 3 |
     | Feature LiveComponents plus plain clauses | V49 | the panels' own wires plus one `handle_info` clause per port; store work through `start_async` | LiveView, `send_update` | 1 | clause heads read from source, both ways | 5 |
+    | Plain story modules | V51 | each story's private `wire/4` between its parts, its `input/4` and its `handle_event/4`; the page's `wire/3` between stories | V50's `Steps`; each story given an `out` function | 0 | `Wiring.gaps/1` for pages and stories, `input_gaps/1`, `event_gaps/1`; no event claimed by two stories | 4 |
 
   - **Clauses or a value (settled 2026-10-01).** Wiring written as function clauses in one module
     (`handle_info` clauses on a page, or one `wire/3` clause per port) meets R8: it is one place, which is
