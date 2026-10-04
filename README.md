@@ -12,11 +12,16 @@ and worked examples, including a walk through this checklist rule by rule.
 > Not affiliated with or endorsed by the author.
 
 This repository is intentionally **non-code**: it holds the checklist and the
-notation, not any one language's tooling. The current document,
-[`ala_checklist_elixir.md`](./ala_checklist_elixir.md), was written against an
-Elixir/Phoenix corpus and still uses Elixir examples in places; it is named with
-the `_elixir` suffix to leave room for language-neutral and other-language
-editions alongside it.
+notation, not any one language's tooling. It comes in two editions with the same
+rules (R1–R11), notation and citations:
+
+- [`ala_checklist_functional.md`](./ala_checklist_functional.md): the
+  language-neutral edition for functional languages. Techniques are described in
+  general terms, with no language-specific code.
+- [`ala_checklist_elixir.md`](./ala_checklist_elixir.md): the Elixir edition,
+  written against an Elixir/Phoenix LiveView corpus. It adds Elixir and LiveView
+  code for each technique, the variants each one was built in, and notes on the
+  Elixir linter.
 
 ## Implementations
 
