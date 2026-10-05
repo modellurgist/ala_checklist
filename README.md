@@ -12,12 +12,21 @@ and worked examples, including a walk through this checklist rule by rule.
 > Not affiliated with or endorsed by the author.
 
 This repository is intentionally **non-code**: it holds the checklist and the
-notation, not any one language's tooling. It comes in two editions with the same
+notation, not any one language's tooling. It comes in four editions with the same
 rules (R1–R11), notation and citations:
 
 - [`ala_checklist_functional.md`](./ala_checklist_functional.md): the
   language-neutral edition for functional languages. Techniques are described in
   general terms, with no language-specific code.
+- [`ala_checklist_object_oriented.md`](./ala_checklist_object_oriented.md): the
+  language-neutral edition for object-oriented languages, statically or
+  dynamically typed. It reads each rule for classes and objects and adds what
+  Spray says about object-oriented programs (ports on classes, no associations or
+  inheritance, explicit wiring instead of DI containers, threads, design patterns).
+- [`ala_checklist_ruby.md`](./ala_checklist_ruby.md): the object-oriented edition
+  with Ruby and Rails examples: a small ports-and-wiring Foundation, paradigm
+  modules, domain abstractions, compositions, tests, and where Rails' pieces sit.
+  No Ruby variant has been built yet.
 - [`ala_checklist_elixir.md`](./ala_checklist_elixir.md): the Elixir edition,
   written against an Elixir/Phoenix LiveView corpus. It adds Elixir and LiveView
   code for each technique, the variants each one was built in, and notes on the

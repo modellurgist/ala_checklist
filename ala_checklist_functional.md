@@ -943,8 +943,9 @@ leaving it as background for an earlier rule.
     one use case's data and is shared with another (the strict reading above).
   - *Spray:* §3.6.1 (the ground symbol); §3.8 (no data coupling); §4.8.1 (no shared DTOs); §6.17.2
     (use cases depending on entities "is incompatible with ALA"; dataflows carry "only the data that
-    is needed by the use case"); §7.8.
-    The identity-key technique is a database-backed way to meet it, not Spray's wording.
+    is needed by the use case"; a use case's private data stored "against a customer identity"); §7.8.
+    The identity-key technique is Spray's (§6.17.2: "A particular use case should only know about it's
+    own data, and only store it against a customer identity"); only its name is this checklist's.
 - **R11 — the composition layers are composition only: the application, and Features when an app
   has them.** The application instantiates, configures, and connects. It holds *all* app-specific
   knowledge and *no* app-specific logic: "no normal programming language code such as assignments
@@ -1320,7 +1321,7 @@ positions.
 | Branches in a UI composition | "no ... if statements" in the application (§3.5) | multi-clause handlers and forwarding matches read as routing; a lifecycle check tolerated where the framework requires it (R11) | the framework delivers events and a lifecycle to the screen; the departures are recorded, kept small, and never used for logic, and most can move to a framework hook |
 | Size | a fundamental constraint (Summary) | module size is an advisory check (R7): a module over 500 lines is scored only in a strict mode, and an average under 100 lines is reported without scoring | line counts are a weak proxy for "readable alone", so a reader decides |
 | Graded checks | ALA's constraints aren't graded | enforcement tiers: R7 and height advisory, R11 and public surface aspirational, the app-layer share, average size and shared aggregate reported only | lets a team adopt the checklist step by step; the tier is about scoring, not about whether a finding is real |
-| Sharing data between features | no data coupling (§3.8), no shared DTOs (§4.8.1) | R10 states the same property, applied to features: no domain type read by two features | not a departure in substance; the identity-key technique that meets it is the database-backed part |
+| Sharing data between features | no data coupling (§3.8), no shared DTOs (§4.8.1), no shared entities (§6.17.2) | R10 states the same property, applied to features: no domain type read by two features | not a departure in substance; the identity-key technique that meets it is Spray's own (§6.17.2) |
 | The notation | diagrams and wiring code (§3.6) | a text encoding with `[tag]`, `$`, `q`, and tool-stamped marks | a whiteboard- and linter-friendly way to see the shapes; it isn't Spray's |
 | Framework residue in a UI composition | the application is wiring and configuration only (§3.5) | param decoding, a URL-to-step lookup, a client-side hook or two, and component instances kept alive but hidden are recorded as departures | the browser sends strings, the framework hands the screen the URL, some things only the client can do, and some frameworks can't deliver to an unmounted component |
 | Holding the program value | objects change in place | an immutable program value held by its owner (a screen's state, an actor) and stored back after each run ("Past the pipe", R4) | values are immutable; holding the value is not handling the data |
@@ -2510,7 +2511,7 @@ The checklist's vocabulary, in alphabetical order. Section numbers point to Spra
 
 **Handling the data.** The application catching one abstraction's result only to pass it to another. Spray names it at his §1.6.3 step and removes it at §1.6.4. An R11 finding.
 
-**Identity key.** An id two features share while each keeps its own data. One way to meet R10, and this project's technique, not Spray's wording.
+**Identity key.** An id two features share while each keeps its own data. One way to meet R10. The technique is Spray's: "use cases should all know about the abstraction, customer identity. A particular use case should only know about it's own data, and only store it against a customer identity" (§6.17.2); the name is this checklist's.
 
 **Instance.** The run-time use of an abstraction: a configured value, a process, or just a reference to a pure function (§3.2.2).
 
