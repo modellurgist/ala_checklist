@@ -26,7 +26,9 @@ rules (R1–R11), notation and citations:
 - [`ala_checklist_ruby.md`](./ala_checklist_ruby.md): the object-oriented edition
   with Ruby and Rails examples: a small ports-and-wiring Foundation, paradigm
   modules, domain abstractions, compositions, tests, and where Rails' pieces sit.
-  No Ruby variant has been built yet.
+  Two Rails variants are built against it in
+  [`ala_variants_ruby`](https://github.com/modellurgist/ala_variants_ruby), scored by
+  [`ala_lint_ruby`](https://github.com/modellurgist/ala_lint_ruby).
 - [`ala_checklist_elixir.md`](./ala_checklist_elixir.md): the Elixir edition,
   written against an Elixir/Phoenix LiveView corpus. It adds Elixir and LiveView
   code for each technique, the variants each one was built in, and notes on the
