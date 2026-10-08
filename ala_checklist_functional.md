@@ -308,6 +308,24 @@ composition" covers both.
       configured threshold and let it flow down as data, which also keeps the display components pure.
     - *Pass message text in too.* Notification and label text is an application literal. The
       composition supplies it as configuration, or maps a feature's fact to text it words itself.
+    - **UI text is configuration: Spray's practice in every example, and this checklist's rule.**
+      Every word a user reads in his code arrives from the application: `new Display(label:
+      "Temperature")` (§2.1.3), `new TextBox(Label="Filter by name")`, `new Menu("File")`, a wizard's
+      titles and items, even a status line wired in as a `LiteralString("Connected to device")`
+      (§5.8, the device application); "Using one in a specific application only requires a label and
+      a binding to an action" (§7.14). His UI abstractions carry no words of their own. He never
+      states it as a rule, so the rule is this checklist's, drawn from §1.6.3 (literals at the
+      composition) and §2.4 (the application holds the knowledge of the requirements): a word that
+      belongs to one product is requirement knowledge, and a domain abstraction that held it would
+      not be reusable in the sense of §2.2.
+      - *The domain-vocabulary exception.* A word the abstraction's **domain** owns stays with it; a
+        word the **product** owns moves to the composition. A date picker's "Today", a pager's
+        "Next", a retail stock badge's "Out of stock" are their abstractions' vocabulary (Spray's
+        domain is "the domain of applications", §2.2, so a domain UI abstraction may know its domain's
+        words). "Your cart is empty." and "Standard (5–7 days)" are this store's. *Reviewer's
+        test:* would another product in the same domain keep this word? Keep it if yes, hoist it if
+        no. A linter can't tell the two apart; it reports every word below the composition and the
+        reviewer decides, recording the decision in the code where the tool supports it.
     - *Supply every word from the composition as a map.* The composition holds its words in one map,
       merges in words shared across the product, and passes each UI component its part. Components
       render only what they're given.
