@@ -1975,6 +1975,63 @@ above (UI, feature, data source or sink), or a paradigm. Spray's UI abstraction 
 abstraction is") sets what the UI pieces may do: render what's wired in, emit events, contain other
 UI. *This mapping is the checklist's Elixir reading.*
 
+**UI layout is application (or feature) knowledge, and it is expected to be product-specific.**
+The layout tree, what is displayed inside what and in what order, is written by the composition in
+the UI-layout paradigm: "A relationship means put the target instance of a UI element inside the
+first instance of a UI element. The order of the fanout of relationships sets the order that the
+elements appear" (§4.12); in the thermometer "the lines obviously don't mean dataflow - they mean
+'display inside'" (§1.6.6). Spray never treats that tree as reusable. It is the user story's own:
+"the layout of the UI is a small amount of information, and the bindings of the UI elements to data
+are a small amount of information. So all that cohesive knowledge is kept together, encapsulated
+inside a feature. Instead, the UI is composed from Domain UI abstractions" (§7.14), and he keeps UI
+with the story on purpose: "we don't separate UI from business logic and data models as we do in
+conventional architectural layering patterns. These are highly cohesive things from the perspective
+of user stories" (§1.6.6). So the unique arrangement of a screen is non-generic by design and sits
+at the top; only the elements placed in it (his `Vertical`, `Horizontal`, `Grid`, `Menu`, `TextBox`,
+a row component, a badge) are domain abstractions, and their own "style, functionality and
+suitability to their domain context" (§7.14) is theirs to carry. The rules that still apply to the
+layout are R11 (it places and wires, it doesn't compute or branch) and R3 (the words in it are the
+product's, which is where they belong). In LiveView, that tree is the page's HEEx: the template's nesting is the "display inside" wiring, and its grid and spacing classes are the page's own. A function component's internal markup and classes are the component's own style (§7.14); a page-level layout is the application's. Neither is a finding. *Checklist reading of §4.12, §1.6.6 and §7.14.*
+
+*In LiveView, concretely.* The page's HEEx is the layout tree. Everything below is application
+knowledge and expected to be this product's, and none of it is a finding:
+
+```heex
+<%!-- the cart page: the arrangement is the page's; the elements are domain UI abstractions --%>
+<div class="grid items-start gap-8 lg:grid-cols-[1fr_22rem]">
+  <section class="rounded-2xl border bg-white p-6">
+    <.tabs tabs={@tabs} />
+    <.cart_line :for={row <- @rows} row={row} words={@words.cart} />   <%# or a rows component %>
+  </section>
+  <aside class="lg:sticky lg:top-6">
+    <.cart_summary summary={@summary} words={@words.cart} />
+    <.shipping_selector summary={@summary} words={@words.cart} />
+  </aside>
+</div>
+```
+
+The two-column grid, the sticky aside, the order (summary above the selector), the gaps and
+rounded borders: that is "display inside" and "the order of the fanout" (§4.12), the page's own,
+and there is no sense in which another product would reuse it. The elements it places are domain UI
+abstractions, and the classes *inside* `cart_line` or `cart_summary` (a row's own `grid-cols`, its
+truncation, its hover colour) are the component's style, "suitability to their domain context"
+(§7.14), also not a finding. What would be findings, and why:
+
+- `:for={row <- @rows}` in the page's own markup is iteration, R11's "for loop" (§1.6.3), scored
+  under `--super-strict`; a `rows` component that takes the list iterates instead. It is in the
+  example above because every variant until V48 had it; V49–V51 don't.
+- `:if={@summary.item_count == 0}` or `class={if @step == :payment, do: "…"}` in the page is a
+  comparison: R11. A `none` component takes the count; a `milestones` component takes the step.
+- `<.cart_summary>` fetching its own totals from a context, or a page-specific LiveComponent with
+  its own state and handlers used by one page, is the contained sub-component of §2.2 (R11; R6 when
+  it also does I/O).
+- Words in a *component's* markup ("Your cart is empty.") are R3; the page passes `words` in. Words
+  in the *page's* markup are the product's, in the product's own layer, and fine.
+
+The honest cost: a page's HEEx is where a Phoenix developer most wants to write a quick `:if`, and
+R11 asks them to name a component instead. That is the one place the checklist and the framework's
+habit pull apart, and it is why R11 is scored only at the strictest tier.
+
 | Piece | What it is | What it may do |
 |---|---|---|
 | The page's LiveView module (`mount/3`, callbacks, `render/1`) | Application | instantiate and configure, wire, hold application literals; no computing, deciding, fetching or persisting of its own (R11) |
@@ -2030,6 +2087,41 @@ throughout.*
 | Forms and changesets | a feature or domain module validates; the page supplies the messages; the form posts events to the page or host | validation messages live in the feature; the page validates | R3, R11 |
 | JS commands and hooks | `JS.navigate`, `phx-hook` named in the template | a hook carries product rules | R3 |
 | Page-specific LiveComponents (`FormComponent`, a page's own panels) | never: a page composes its UI from domain UI abstractions it configures (a generic record form), and its function components hold only markup | a LiveComponent with its own state and handlers is used only inside one page: a contained sub-component (§2.2) | R11 |
+
+**Where Ash's pieces sit.** Ash is a declarative, resource-centric framework: a resource declares
+its attributes, relationships, actions (with their changes and validations), calculations,
+aggregates, identities, policies and data layer, and extensions derive forms, APIs, state machines,
+scheduled work and notifications from it. The resource is the hub every use case attaches to, which
+is the entity Spray argues against (§6.17.2), and it composes by containment inside the DSL, not by
+wiring. Each piece against the rules; *Spray says nothing about Ash, so every placement is this
+checklist's reading.*
+
+| Ash piece | ALA role | Meets the rules when | Misses them when |
+|---|---|---|---|
+| `Ash.Resource` with attributes and a data layer | an abstraction of persistence (§6.19), in the bottom layer | it is one feature's private table, keyed by an identity, configured into that feature (§6.17.2) | every feature reads, writes and queries it (R10, R1, R9) |
+| `relationships`, `load` | an association | it joins one feature's own resources | it walks into another feature's data (R10) |
+| `actions`, `change`s, `validate`s | the store's intrinsic rules | the resource is one feature's and the rules are its own | a shared resource carries several features' rules (R10, R6); messages are written in the resource (R3) |
+| `calculations`, `aggregates` | pure rules over the resource's data | within the resource's own feature | across features' resources (R10) |
+| `policies` | an intrinsic constraint, or a product rule | it constrains the table itself | it encodes who may check out, in the entity (R3, R11) |
+| `Ash.Domain`, code interfaces | the store's main interface (§2.3.4) | the layer above calls it as configuration-shaped calls | features reach peers' domains through it (R1) |
+| `AshPhoenix.Form` | a generic record form: a UI domain abstraction | the page configures and wires it | — |
+| `AshStateMachine` | a state machine (§4.16) attached to the entity | on a per-feature resource | on a shared resource (a shared rule) |
+| `Ash.Notifier` | an output port, if the notifier is generic | `return_notifications?: true` hands the fact to the caller, who routes it (an outcome returned, not a peer called); or a generic notifier in the paradigms layer forwards to a receiver the application registered at start-up | the notifier decides what happens next, or names a topic (§4.4.2, R1, R5) |
+| `Ash.Notifier.PubSub` (`pub_sub do publish ... end`) | the resource choosing its receivers' channel and naming the topic | — | always, as declared: the sender registers the channel (§4.4.2) and two modules agree on the string (§4.7.4, R5). The composition owns the topic through one `Broadcast` module instead |
+| `AshOban` triggers (`where` + `action`) | the resource scheduling its own follow-ups | a condition intrinsic to the resource's own lifecycle, with the schedule from configuration | the condition is a requirement ("pending orders get processed") written in the entity (R1, R11); the cron is an application literal below the composition (R3) |
+| `AshOban` scheduled actions (cron in the resource) | an application literal below the composition (R3) | — | always, as declared; keep the cron in the application's Oban configuration and let a job push one input of a feature |
+| Oban itself | an asynchronous execution model | a paradigm-layer job delivers a push to an input the composition named | a domain module enqueues a peer's job by class name (R1) |
+| `Reactor` | a saga runner: an execution model | used generically, in the paradigms layer | a reactor that names features (a working chain, R1) |
+
+The rule in one sentence: use `Ash.Resource` as the store abstraction for one feature's private
+table, keyed by an identity, with that feature's intrinsic rules inside it, and nothing more. Ash's
+value is in the parts ALA forbids (cross-resource loads, relationships, fan-out notifiers, triggers
+that react to data), so an Ash-in-ALA app uses a small slice; a team that wants the derivations is
+choosing the entity architecture, and this checklist's job is to say so. A layer map places resources
+by their `use` (`uses: [~r/Ash\.Resource/]` in the bottom layer), after which the linter sees
+feature → resource references, upward edges from a notifier, and a topic string in two modules; it
+cannot see the DSL's containment, a relationship atom, a policy's product rule, or a cron in a
+`scheduled_action`. No variant uses Ash yet.
 
 Four settled readings behind the table:
 - **Clauses in one module meet R8.** Multi-clause handlers and `wire/3` clauses on one page are one

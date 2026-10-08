@@ -2833,6 +2833,79 @@ a domain abstraction of one of the kinds above (UI, feature, data source or sink
 Spray's UI abstraction (see "What a domain abstraction is") sets what the UI pieces may do: render
 what's wired in, emit events, contain other UI. *This mapping is the checklist's reading.*
 
+**UI layout is application (or feature) knowledge, and it is expected to be product-specific.**
+The layout tree, what is displayed inside what and in what order, is written by the composition in
+the UI-layout paradigm: "A relationship means put the target instance of a UI element inside the
+first instance of a UI element. The order of the fanout of relationships sets the order that the
+elements appear" (§4.12); in the thermometer "the lines obviously don't mean dataflow - they mean
+'display inside'" (§1.6.6). Spray never treats that tree as reusable. It is the user story's own:
+"the layout of the UI is a small amount of information, and the bindings of the UI elements to data
+are a small amount of information. So all that cohesive knowledge is kept together, encapsulated
+inside a feature. Instead, the UI is composed from Domain UI abstractions" (§7.14), and he keeps UI
+with the story on purpose: "we don't separate UI from business logic and data models as we do in
+conventional architectural layering patterns. These are highly cohesive things from the perspective
+of user stories" (§1.6.6). So the unique arrangement of a screen is non-generic by design and sits
+at the top; only the elements placed in it (his `Vertical`, `Horizontal`, `Grid`, `Menu`, `TextBox`,
+a row component, a badge) are domain abstractions, and their own "style, functionality and
+suitability to their domain context" (§7.14) is theirs to carry. The rules that still apply to the
+layout are R11 (it places and wires, it doesn't compute or branch) and R3 (the words in it are the
+product's, which is where they belong). In Rails, that tree is the page template: its nesting is the "display inside" wiring, and its grid and spacing classes are the page's own. A partial's internal markup and classes are the component's own style (§7.14); a page-level layout is the application's. Neither is a finding. *Checklist reading of §4.12, §1.6.6 and §7.14.*
+
+*In Rails, concretely.* The page template is the layout tree. Everything below is application
+knowledge and expected to be this product's, and none of it is a finding:
+
+```erb
+<%# app/views/carts/show.html.erb: the arrangement is the page's; the partials are domain UI abstractions %>
+<div class="grid items-start gap-8 lg:grid-cols-[1fr_22rem]">
+  <section class="rounded-2xl border bg-white p-6" data-controller="tabs">
+    <%= render "elements/tabs", tabs: @tabs %>
+    <%= render partial: "components/cart_line", collection: @s.rows, as: :row, locals: { t: @texts[:cart] } %>
+  </section>
+  <aside class="lg:sticky lg:top-6">
+    <%= render "components/cart_summary", summary: @s.summary, t: @texts[:cart] %>
+    <%= render "components/shipping_selector", summary: @s.summary, url: shipping_cart_path %>
+  </aside>
+</div>
+```
+
+The two-column grid, the sticky aside, the order (summary above the selector), the gaps and
+rounded borders: that is "display inside" and "the order of the fanout" (§4.12), the page's own,
+and there is no sense in which another product would reuse it. The partials it places are domain UI
+abstractions (`views/components/`, and the generic `views/elements/` under them), and the classes
+*inside* `_cart_line` or `_cart_summary` (a row's own `grid-cols`, its truncation, its hover colour)
+are the partial's style, "suitability to their domain context" (§7.14), also not a finding. The
+linter reads neither `class:` arguments nor `class="…"` attributes as text. What would be findings,
+and why:
+
+- `<% @s.rows.each do |row| %>` in the page is iteration, R11's "for loop" (§1.6.3), scored under
+  `--super-strict`; `render collection:` lets the framework iterate, which needs each row to carry
+  what the partial needs (its URLs, its flags), as V02 does.
+- `disabled: @s.summary[:item_count] == 0` or `form.persisted? ? a : b` in the page is a comparison:
+  R11. The row or the summary carries the boolean; `form_with model:` picks the URL.
+- A partial that calls a model (`Product.find`) or a route helper is a UI abstraction with a data
+  source, or the application's routes, inside it: `ui_io` (R6) and an upward edge. The page passes
+  rows and URLs in.
+- A partial that renders a *peer* partial (`_cart_line` rendering `_product_line` when both are
+  domain UI) is R1; the page places both, or the inner one is declared more general (`elements/`).
+- Words in a *partial's* markup ("Your cart is empty.") are R3; the page passes `t:` in. Words in
+  the *page's* markup are the product's, in the product's own layer, and fine.
+
+The honest cost: a page template is where a Rails developer most wants to write a quick `if` or
+`each`, and R11 asks for a partial or a collection render instead. That is the one place the
+checklist and the framework's habit pull apart, and it is why R11 is scored only at the strictest
+tier.
+
+**Resource-centric frameworks.** A framework whose central unit is a declared entity with the
+behaviour of every use case attached to it (an ORM model with callbacks, a resource with actions,
+notifiers and scheduled triggers derived from it) is the entity architecture Spray rejects: entities
+"will tend to hold some fields that, although they associate with an identify, really belong to
+separate use cases" (§6.17.2). The usable slice is the same in every such framework: one entity per
+feature's private data, keyed by an identity, with that feature's intrinsic rules inside it, reached
+as a configured store. The parts that don't fit are the ones the framework is prized for:
+associations that walk across features (R10), callbacks or notifiers that decide what happens next
+or name a topic (§4.4.2, R1, R5), and schedules or conditions declared on the entity (R3, R11). "Where Rails' pieces sit" below reads Active Record this way; the Elixir edition reads Ash the
+same way, piece by piece. *Checklist reading.*
+
 | Piece | What it is | What it may do |
 |---|---|---|
 | The screen's class or controller (start-up, callbacks, actions, render) | Application | instantiate and configure, wire, hold application literals; no computing, deciding, fetching or persisting of its own (R11) |

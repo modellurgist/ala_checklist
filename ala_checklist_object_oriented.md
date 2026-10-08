@@ -2339,6 +2339,36 @@ a domain abstraction of one of the kinds above (UI, feature, data source or sink
 Spray's UI abstraction (see "What a domain abstraction is") sets what the UI pieces may do: render
 what's wired in, emit events, contain other UI. *This mapping is the checklist's reading.*
 
+**UI layout is application (or feature) knowledge, and it is expected to be product-specific.**
+The layout tree, what is displayed inside what and in what order, is written by the composition in
+the UI-layout paradigm: "A relationship means put the target instance of a UI element inside the
+first instance of a UI element. The order of the fanout of relationships sets the order that the
+elements appear" (§4.12); in the thermometer "the lines obviously don't mean dataflow - they mean
+'display inside'" (§1.6.6). Spray never treats that tree as reusable. It is the user story's own:
+"the layout of the UI is a small amount of information, and the bindings of the UI elements to data
+are a small amount of information. So all that cohesive knowledge is kept together, encapsulated
+inside a feature. Instead, the UI is composed from Domain UI abstractions" (§7.14), and he keeps UI
+with the story on purpose: "we don't separate UI from business logic and data models as we do in
+conventional architectural layering patterns. These are highly cohesive things from the perspective
+of user stories" (§1.6.6). So the unique arrangement of a screen is non-generic by design and sits
+at the top; only the elements placed in it (his `Vertical`, `Horizontal`, `Grid`, `Menu`, `TextBox`,
+a row component, a badge) are domain abstractions, and their own "style, functionality and
+suitability to their domain context" (§7.14) is theirs to carry. The rules that still apply to the
+layout are R11 (it places and wires, it doesn't compute or branch) and R3 (the words in it are the
+product's, which is where they belong). In a UI framework, that tree is the screen's layout code or template, and its spacing and grid rules are the screen's own; a component's internal markup and style are the component's (§7.14). Neither is a finding. *Checklist reading of §4.12, §1.6.6 and §7.14.*
+
+**Resource-centric frameworks.** A framework whose central unit is a declared entity with the
+behaviour of every use case attached to it (an ORM model with callbacks, a resource with actions,
+notifiers and scheduled triggers derived from it) is the entity architecture Spray rejects: entities
+"will tend to hold some fields that, although they associate with an identify, really belong to
+separate use cases" (§6.17.2). The usable slice is the same in every such framework: one entity per
+feature's private data, keyed by an identity, with that feature's intrinsic rules inside it, reached
+as a configured store. The parts that don't fit are the ones the framework is prized for:
+associations that walk across features (R10), callbacks or notifiers that decide what happens next
+or name a topic (§4.4.2, R1, R5), and schedules or conditions declared on the entity (R3, R11). The
+Elixir edition reads Ash this way piece by piece, and the Ruby edition reads Rails' Active Record
+the same way. *Checklist reading.*
+
 | Piece | What it is | What it may do |
 |---|---|---|
 | The screen's class or controller (start-up, callbacks, actions, render) | Application | instantiate and configure, wire, hold application literals; no computing, deciding, fetching or persisting of its own (R11) |
