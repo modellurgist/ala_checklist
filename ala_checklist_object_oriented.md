@@ -3258,6 +3258,49 @@ theme or settings module every component reads, or application config.)
   composition, is Spray's form (§4.16); a transitions table passed in as configuration is the
   lighter one.
 
+
+#### Run-time cost: what the wiring makes visible *(in development)*
+
+ALA changes no complexity class. A wire is one indirection (a closure, a virtual call, a message),
+so an algorithm wired from stages has the big-O of the same algorithm in one function plus a
+constant per hop. What ALA changes is *where* the cost decisions sit and *what can be read off the
+diagram*. Spray's only structural claim about performance is that it is a wiring-time decision:
+push or pull, sync or async, batching ("push by default, pull for performance"; `ADC(batchSize=100)`
+and `Foreach` in the thermometer, §1.6.5; "sometimes a push has to become a pull… on performance
+grounds", §3.4.5; execution models chosen per paradigm, §4.3), so changing one never touches an
+abstraction's code. Four properties follow, each checkable on the drawing of a built composition:
+
+- **An input costs what it reaches.** In push dataflow one input costs the work along the wires it
+  reaches, O(vertices + edges reached), not O(system size). Count hops from the input to every
+  sink: that is the cost model, and it is the "relays per effect" count the variants record. A
+  composition that routes everything through one hub pays the hub on every input.
+- **Polled execution costs every instance every tick.** Spray's coffee maker runs its six lines
+  "continually… in a loop" (§2.9.4): O(instances) per cycle whether or not anything changed. Right
+  for a controller with a handful of sensors, wrong for a page. A push execution model costs only
+  what changed.
+- **Change propagation can recompute.** An instance that re-emits whenever *any* input changes
+  emits more than once in a cycle where two of its inputs change, and in a layered diamond that
+  grows with depth (the reactive-programming glitch). Two ALA-shaped answers: the emitting instance
+  sends only on a change of its *output* (the guard goes into the connection, §1.6.4), or the
+  execution model schedules in topological order so each instance runs once per tick (O(V + E)).
+  A runner that applies one step's outputs in order, synchronously and without re-entry, is
+  glitch-free by construction: each output lands once.
+- **A pull port hides its cardinality.** A request/response port's natural grain is one question,
+  so a pull inside a loop is a query per row. The drawing shows the port, not how often it is asked.
+  The composition must batch: ask for the ids once and answer a map, or configure the store with a
+  preload. This is the one place ALA makes a performance mistake *easier*, because the port looks
+  the same whether it is asked once or n times.
+
+Two costs that are not concerns: building the composition (a few dozen allocations, O(parts +
+wires), negligible next to one query, even per request), and the fan-out of a broadcast topic, which
+is O(subscribers) per fact and is decided by the topic's grain, a composition choice (one topic for
+all products means every open page sees every sale; one per product means O(lines) subscriptions
+per page).
+
+*Reviewer's test:* for each input, trace its wires to every sink and count hops and fan-out; for
+each pull port, find who asks it and how many times per input; for each instance with two or more
+inputs, ask whether it emits on input or on change.
+
 #### Candidate checks (not yet rules)
 
 - A domain class that decides sync or async, or push or pull, for its caller (for example, awaiting
