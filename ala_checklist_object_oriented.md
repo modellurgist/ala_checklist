@@ -796,6 +796,19 @@ ugly. R6–R8 add the *design-quality* axes structure alone doesn't cover.
     keep a *little* ball of mud from quietly becoming a *big* one are (a) through (c): a module that
     stops being nameable, blows the size cap, or exposes a wide public API has leaked its mud outward,
     and *that* is the defect the checklist catches, not the internal mess.
+    *What the public-surface count counts.* A class is not an ALA concept; the abstraction is, and an abstraction has several ports (§7.2.3: "abstractness decreases
+    with more ports", which is a warning about specificity, not a call for one port). In an object-oriented language an input port is a public method, so a
+    count of public functions on a state module is the count of input ports on one abstraction, and
+    one-method classes would be a port per module, which destroys the abstraction rather than purifying it. The
+    count is a proxy for "one concept" (R6, R7) that a linter can read: a module well above the rest
+    is probably two concepts sharing a name. The default of 12 in `ala_lint` came from one
+    application's distribution, measured on the top variants in 2026-10: rules, stores and sinks sit
+    at 1 to 5 public functions; the step machines (checkout, order submission) and the lines value
+    sit at 11 or 12 as single concepts with many inputs; nothing sat at 13; and the two modules above
+    (a cart state at 19 that was lines, a promo, a shipping choice and totals; an order's lines at 14
+    that were lines and pricing) were the two later split on other grounds. Below about 10 the check
+    would ask to split whole abstractions, and 15 would have let the 14 through. One application's
+    evidence is a reason for a default, not a rule, which is why the check stays advisory and tunable.
   - **Techniques that meet it.**
     - *Carry the least machinery that works.* Strong compliance is possible with almost no apparatus.
       When you find yourself adding a layer to hold a layer, that is the smell R7 names.
