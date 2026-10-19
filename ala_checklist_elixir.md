@@ -1212,7 +1212,9 @@ leaving it as background for an earlier rule.
       flags such a value type, set `checks: %{r10_aggregate: :advisory}` and record why.
     - *Building an instance isn't reading it.* A feature "creates instances of domain abstractions"
       (§2.2); a module whose only use of an aggregate is calling its `new` doesn't know its data, and
-      `ala_lint` doesn't count it as a reader.
+      neither does one that builds its own instance and uses it only through the abstraction's
+      functions (the "still allowed" case above). `ala_lint` counts neither as a reader, and since
+      2026-10-19 reports a shared struct only when at least one of its users is a reader.
   - **Elixir techniques, in more detail.**
     - *Give features private structs and share only a key.* V24's isolated capsules, V26's dual
       capsules, and V36's per-feature structs mean two features never hold the same data struct. They
